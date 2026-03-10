@@ -3,9 +3,19 @@
 import { useMemo, useCallback } from "react";
 import { GridLayout, useContainerWidth } from "react-grid-layout";
 import type { Layout } from "react-grid-layout";
+import { LayoutGrid } from "lucide-react";
 import { useWidgetStore } from "@/store/widget-store";
 import { WidgetCard } from "@/components/widget-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  EmptyDescription,
+  EmptyContent,
+} from "@/components/ui/empty";
+import { CreateWidgetDialog } from "@/components/create-widget-dialog";
 
 const COLS = 12;
 const ROW_HEIGHT = 80;
@@ -30,19 +40,25 @@ export function DashboardGrid() {
   );
 
   return (
-    <div ref={containerRef} className="flex-1 w-full overflow-hidden">
+    <div ref={containerRef} className="min-w-0 flex-1 w-full overflow-hidden">
       {widgets.length === 0 ? (
-        <div className="h-full flex items-center justify-center">
-          <div className="text-center space-y-3">
-            <div className="text-zinc-600 text-sm uppercase tracking-widest">
-              No widgets yet
-            </div>
-            <p className="text-zinc-700 text-xs max-w-xs">
-              Click &quot;Add Widget&quot; to create your first widget and start
-              building your dashboard.
-            </p>
-          </div>
-        </div>
+        <Empty className="h-full">
+          <EmptyHeader>
+            <EmptyMedia variant="icon" className="rounded-lg bg-zinc-800 text-zinc-400">
+              <LayoutGrid />
+            </EmptyMedia>
+            <EmptyTitle className="text-zinc-300 uppercase tracking-widest">
+              No Widgets Yet
+            </EmptyTitle>
+            <EmptyDescription className="text-zinc-500 max-w-xs">
+              Get started by adding your first widget to build out your
+              monitoring dashboard.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <CreateWidgetDialog />
+          </EmptyContent>
+        </Empty>
       ) : (
         <ScrollArea className="h-full w-full">
           <div className="px-5 pt-1">

@@ -2,17 +2,27 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { LayoutItem } from "react-grid-layout";
 
+export interface WidgetMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface Widget {
   id: string;
   title: string;
   description: string;
+  messages: WidgetMessage[];
   layout: LayoutItem;
 }
 
 interface WidgetStore {
   widgets: Widget[];
-  addWidget: (title: string, description: string) => void;
+  activeWidgetId: string | null;
+  addWidget: (title?: string, description?: string) => string;
+  addMessage: (widgetId: string, message: WidgetMessage) => void;
   removeWidget: (id: string) => void;
+  setActiveWidget: (id: string | null) => void;
   updateLayouts: (layouts: readonly LayoutItem[]) => void;
 }
 
@@ -52,8 +62,9 @@ export const useWidgetStore = create<WidgetStore>()(
   persist(
     (set, get) => ({
       widgets: [],
+      activeWidgetId: null,
 
-      addWidget: (title, description) => {
+      addWidget: (title = "Untitled Widget", description = "") => {
         const { widgets } = get();
         const pos = getNextPosition(widgets);
         const id = generateId();
@@ -62,6 +73,7 @@ export const useWidgetStore = create<WidgetStore>()(
           id,
           title,
           description,
+          messages: [],
           layout: {
             i: id,
             x: pos.x,
@@ -74,10 +86,29 @@ export const useWidgetStore = create<WidgetStore>()(
         };
 
         set({ widgets: [...widgets, widget] });
+        return id;
+      },
+
+      addMessage: (widgetId, message) => {
+        set({
+          widgets: get().widgets.map((w) =>
+            w.id === widgetId
+              ? { ...w, messages: [...w.messages, message] }
+              : w
+          ),
+        });
       },
 
       removeWidget: (id) => {
-        set({ widgets: get().widgets.filter((w) => w.id !== id) });
+        set((state) => ({
+          widgets: state.widgets.filter((w) => w.id !== id),
+          activeWidgetId:
+            state.activeWidgetId === id ? null : state.activeWidgetId,
+        }));
+      },
+
+      setActiveWidget: (id) => {
+        set({ activeWidgetId: id });
       },
 
       updateLayouts: (layouts) => {

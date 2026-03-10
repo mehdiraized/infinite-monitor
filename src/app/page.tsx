@@ -1,24 +1,30 @@
 "use client";
 
 import { DashboardGrid } from "@/components/dashboard-grid";
+import { ChatSidebar } from "@/components/chat-sidebar";
 import { CreateWidgetDialog } from "@/components/create-widget-dialog";
+import { ScrambleText } from "@/components/scramble-text";
 
 export default function Home() {
+  const infiniteLen = "Infinite".length;
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-zinc-950">
       <header className="flex items-center justify-between px-5 py-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-sm font-medium uppercase tracking-[0.2em] text-zinc-300">
-            Infinite Monitor
-          </h1>
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            Live
-          </span>
-        </div>
+        <h1 className="text-sm font-medium uppercase tracking-[0.2em]">
+          <ScrambleText
+            text="InfiniteMonitor"
+            charClassName={(i) =>
+              i < infiniteLen ? "text-zinc-600" : "text-zinc-300"
+            }
+          />
+        </h1>
         <CreateWidgetDialog />
       </header>
-      <DashboardGrid />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <DashboardGrid />
+        <ChatSidebar />
+      </div>
     </div>
   );
 }
