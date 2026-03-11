@@ -1,8 +1,13 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "streamdown/styles.css";
 
 @source "../node_modules/streamdown/dist/*.js";
+@source "../node_modules/@streamdown/code/dist/*.js";
+@source "../node_modules/@streamdown/cjk/dist/*.js";
+@source "../node_modules/@streamdown/math/dist/*.js";
+@source "../node_modules/@streamdown/mermaid/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -119,8 +124,8 @@
 }
 
 @layer base {
-  * {
-    @apply border-border outline-ring/50;
+  :where(*) {
+    border-color: var(--color-border);
   }
   html,
   body {
@@ -129,6 +134,18 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Streamdown code blocks */
+[data-streamdown="code-block"] {
+  border: none;
+  min-width: 0;
+  max-width: 100%;
+}
+
+[data-streamdown="code-block"] pre {
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 /* react-grid-layout */

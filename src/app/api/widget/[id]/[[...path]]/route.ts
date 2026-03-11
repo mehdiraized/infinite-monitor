@@ -1,10 +1,5 @@
 import { NextRequest } from "next/server";
-import {
-  ensureWidget,
-  writeWidgetCode,
-  readWidgetCode,
-  getWidgetStatus,
-} from "@/lib/widget-runner";
+import { ensureWidget, readWidgetFile } from "@/lib/widget-runner";
 
 const LOADING_HTML = `<!DOCTYPE html>
 <html class="dark">
@@ -24,8 +19,7 @@ export async function GET(
 ) {
   const { id, path: pathSegments } = await params;
 
-  // Read widget code from disk (written by the chat API)
-  const code = await readWidgetCode(id);
+  const code = await readWidgetFile(id, "src/App.tsx");
   if (!code) {
     return new Response("Widget not found", { status: 404 });
   }
@@ -41,7 +35,6 @@ export async function GET(
     });
   }
 
-  // Proxy the request to the container
   const subPath = pathSegments?.join("/") ?? "";
   const targetUrl = `http://localhost:${container.port}/${subPath}${req.nextUrl.search}`;
 
@@ -57,6 +50,22 @@ export async function GET(
     const contentType =
       upstream.headers.get("content-type") ?? "text/html";
 
+    // For the root HTML response, inject a <base> tag so relative asset
+    // paths (./assets/...) resolve correctly even though Next.js strips
+    // the trailing slash from the iframe URL.
+    if (!subPath && contentType.includes("text/html")) {
+      const html = await upstream.text();
+      const baseTag = `<base href="/api/widget/${id}/">`;
+      const patched = html.replace("<head>", `<head>${baseTag}`);
+      return new Response(patched, {
+        status: upstream.status,
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
     return new Response(upstream.body, {
       status: upstream.status,
       headers: {
@@ -65,7 +74,6 @@ export async function GET(
       },
     });
   } catch {
-    // Container may have died — return loading HTML to trigger retry
     return new Response(LOADING_HTML, {
       status: 200,
       headers: { "Content-Type": "text/html; charset=utf-8" },

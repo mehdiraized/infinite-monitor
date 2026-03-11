@@ -1,5 +1,5 @@
 import Docker from "dockerode";
-import getPort from "get-port";
+import getPort, { portNumbers } from "get-port";
 import fs from "fs/promises";
 import path from "path";
 
@@ -19,125 +19,215 @@ interface WidgetContainer {
 
 const registry = new Map<string, WidgetContainer>();
 
-/** Write the agent's App.tsx to disk for a given widget. */
-export async function writeWidgetCode(
-  widgetId: string,
-  code: string
-): Promise<void> {
-  const widgetDir = path.join(WIDGET_BASE_PATH, widgetId, "src");
-  await fs.mkdir(widgetDir, { recursive: true });
-  await fs.writeFile(path.join(widgetDir, "App.tsx"), code, "utf-8");
+// ── Security ──
+
+const VALID_PACKAGE_RE = /^(@[\w.-]+\/)?[\w.-]+(@[\w.^~>=<| -]+)?$/;
+
+function sanitizePath(relativePath: string): string {
+  const normalized = path.posix.normalize(relativePath);
+  if (path.isAbsolute(normalized) || normalized.startsWith("..")) {
+    throw new Error(`Invalid path: ${relativePath}`);
+  }
+  if (!normalized.startsWith("src/")) {
+    throw new Error(`Path must be under src/: ${relativePath}`);
+  }
+  return normalized;
 }
 
-/** Read the agent's App.tsx from disk. */
-export async function readWidgetCode(
-  widgetId: string
+function validatePackages(packages: string[]): void {
+  for (const pkg of packages) {
+    if (!VALID_PACKAGE_RE.test(pkg)) {
+      throw new Error(`Invalid package name: ${pkg}`);
+    }
+  }
+}
+
+// ── File operations ──
+
+export async function writeWidgetFile(
+  widgetId: string,
+  relativePath: string,
+  content: string,
+): Promise<void> {
+  const safePath = sanitizePath(relativePath);
+  const fullPath = path.join(WIDGET_BASE_PATH, widgetId, safePath);
+  await fs.mkdir(path.dirname(fullPath), { recursive: true });
+  await fs.writeFile(fullPath, content, "utf-8");
+}
+
+export async function readWidgetFile(
+  widgetId: string,
+  relativePath: string,
 ): Promise<string | null> {
   try {
-    const filePath = path.join(
-      WIDGET_BASE_PATH,
-      widgetId,
-      "src",
-      "App.tsx"
-    );
-    return await fs.readFile(filePath, "utf-8");
+    const safePath = sanitizePath(relativePath);
+    const fullPath = path.join(WIDGET_BASE_PATH, widgetId, safePath);
+    return await fs.readFile(fullPath, "utf-8");
   } catch {
     return null;
   }
 }
 
-/**
- * Ensure a widget container is running. If already running and ready, return immediately.
- * Otherwise start a new container.
- */
+export async function listWidgetFiles(
+  widgetId: string,
+): Promise<string[]> {
+  const srcDir = path.join(WIDGET_BASE_PATH, widgetId, "src");
+  try {
+    return await walkDir(srcDir, srcDir);
+  } catch {
+    return [];
+  }
+}
+
+async function walkDir(dir: string, root: string): Promise<string[]> {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await walkDir(full, root)));
+    } else {
+      files.push("src/" + path.relative(root, full));
+    }
+  }
+  return files.sort();
+}
+
+export async function deleteWidgetFile(
+  widgetId: string,
+  relativePath: string,
+): Promise<void> {
+  const safePath = sanitizePath(relativePath);
+  if (safePath === "src/App.tsx") {
+    throw new Error("Cannot delete the entry point App.tsx");
+  }
+  const fullPath = path.join(WIDGET_BASE_PATH, widgetId, safePath);
+  await fs.unlink(fullPath).catch(() => {});
+}
+
+// ── Dependencies ──
+
+export async function addWidgetDependencies(
+  widgetId: string,
+  packages: string[],
+): Promise<string[]> {
+  validatePackages(packages);
+  const depsPath = path.join(WIDGET_BASE_PATH, widgetId, "deps.json");
+  let existing: string[] = [];
+  try {
+    existing = JSON.parse(await fs.readFile(depsPath, "utf-8"));
+  } catch {
+    // no existing deps file yet
+  }
+  const merged = [...new Set([...existing, ...packages])];
+  await fs.mkdir(path.dirname(depsPath), { recursive: true });
+  await fs.writeFile(depsPath, JSON.stringify(merged), "utf-8");
+  return merged;
+}
+
+// ── Container management ──
+
 export async function ensureWidget(
-  widgetId: string
+  widgetId: string,
 ): Promise<WidgetContainer> {
   const existing = registry.get(widgetId);
   if (existing && existing.status === "ready") return existing;
   if (existing && existing.status === "building") return existing;
-
   return startWidget(widgetId);
 }
 
-/** Start a new container for a widget. Kills any existing container first. */
+const MAX_PORT_RETRIES = 3;
+
 async function startWidget(widgetId: string): Promise<WidgetContainer> {
-  // Clean up any existing container for this widget
   await stopWidget(widgetId);
 
-  const port = await getPort({ port: { start: 3100, end: 3999 } });
-
-  const widgetSrcPath = path.join(WIDGET_BASE_PATH, widgetId, "src");
-
-  // Ensure the src dir exists
-  await fs.mkdir(widgetSrcPath, { recursive: true });
+  const widgetDir = path.join(WIDGET_BASE_PATH, widgetId);
+  await fs.mkdir(path.join(widgetDir, "src"), { recursive: true });
 
   const entry: WidgetContainer = {
     containerId: "",
-    port,
+    port: 0,
     status: "starting",
   };
   registry.set(widgetId, entry);
 
-  try {
-    const container = await docker.createContainer({
-      Image: IMAGE_NAME,
-      name: `widget-${widgetId}-${Date.now()}`,
-      Cmd: [
-        "sh",
-        "-c",
-        [
-          // Copy base template into /app
-          "cp -r /base/. /app",
-          // Overwrite App.tsx with the agent's version
-          "cp /widget/App.tsx /app/src/App.tsx",
-          // Build and serve
-          "cd /app",
-          "npx vite build",
-          "npx vite preview --host 0.0.0.0 --port 3000",
-        ].join(" && "),
-      ],
-      ExposedPorts: { "3000/tcp": {} },
-      HostConfig: {
-        PortBindings: {
-          "3000/tcp": [{ HostPort: String(port) }],
-        },
-        Binds: [
-          // Mount the widget's src/App.tsx read-only
-          `${widgetSrcPath}:/widget:ro`,
+  for (let attempt = 0; attempt < MAX_PORT_RETRIES; attempt++) {
+    const port = await getPort({ port: portNumbers(3100, 3999) });
+    entry.port = port;
+
+    try {
+      const container = await docker.createContainer({
+        Image: IMAGE_NAME,
+        name: `widget-${widgetId}-${Date.now()}`,
+        Cmd: [
+          "sh",
+          "-c",
+          [
+            "cp -r /base/. /app",
+            "cp -r /widget/src/. /app/src/",
+            "if [ -f /widget/deps.json ]; then cd /app && npm install --no-save $(node -e \"process.stdout.write(JSON.parse(require('fs').readFileSync('/widget/deps.json','utf8')).join(' '))\"); fi",
+            "cd /app",
+            "npx vite build",
+            "npx vite preview --host 0.0.0.0 --port 3000",
+          ].join(" && "),
         ],
-        AutoRemove: true,
-      },
-    });
-
-    await container.start();
-    entry.containerId = container.id;
-    entry.status = "building";
-
-    // Wait for the Vite preview server to become ready
-    waitForReady(port)
-      .then(() => {
-        entry.status = "ready";
-        console.log(
-          `[widget-runner] Widget ${widgetId} ready on port ${port}`
-        );
-      })
-      .catch(() => {
-        entry.status = "error";
-        console.error(
-          `[widget-runner] Widget ${widgetId} failed to start`
-        );
+        ExposedPorts: { "3000/tcp": {} },
+        HostConfig: {
+          PortBindings: {
+            "3000/tcp": [{ HostPort: String(port) }],
+          },
+          Binds: [`${widgetDir}:/widget:ro`],
+          AutoRemove: true,
+        },
       });
 
-    return entry;
-  } catch (err) {
-    entry.status = "error";
-    console.error("[widget-runner] Failed to create container:", err);
-    return entry;
+      await container.start();
+      entry.containerId = container.id;
+      entry.status = "building";
+
+      waitForReady(port)
+        .then(() => {
+          entry.status = "ready";
+          console.log(
+            `[widget-runner] Widget ${widgetId} ready on port ${port}`,
+          );
+        })
+        .catch(() => {
+          entry.status = "error";
+          console.error(
+            `[widget-runner] Widget ${widgetId} failed to start`,
+          );
+        });
+
+      return entry;
+    } catch (err) {
+      const msg = String(err);
+      // Clean up the failed container if it was created but couldn't start
+      try {
+        const stale = docker.getContainer(`widget-${widgetId}-${Date.now()}`);
+        await stale.remove({ force: true }).catch(() => {});
+      } catch {
+        // Container may not exist
+      }
+      if (
+        msg.includes("port is already allocated") &&
+        attempt < MAX_PORT_RETRIES - 1
+      ) {
+        console.warn(
+          `[widget-runner] Port ${port} conflict, retrying (${attempt + 1}/${MAX_PORT_RETRIES})`,
+        );
+        continue;
+      }
+      entry.status = "error";
+      console.error("[widget-runner] Failed to create container:", err);
+      return entry;
+    }
   }
+
+  entry.status = "error";
+  return entry;
 }
 
-/** Stop and remove a widget's container. */
 export async function stopWidget(widgetId: string): Promise<void> {
   const entry = registry.get(widgetId);
   if (!entry || !entry.containerId) return;
@@ -153,24 +243,21 @@ export async function stopWidget(widgetId: string): Promise<void> {
   registry.delete(widgetId);
 }
 
-/** Stop the old container, start a fresh one (re-reads App.tsx from disk). */
 export async function rebuildWidget(
-  widgetId: string
+  widgetId: string,
 ): Promise<WidgetContainer> {
   return startWidget(widgetId);
 }
 
-/** Get current status for a widget. */
 export function getWidgetStatus(
-  widgetId: string
+  widgetId: string,
 ): WidgetContainer | null {
   return registry.get(widgetId) ?? null;
 }
 
-/** Poll until the port returns a response. */
 async function waitForReady(
   port: number,
-  timeout = 60000
+  timeout = 60000,
 ): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeout) {

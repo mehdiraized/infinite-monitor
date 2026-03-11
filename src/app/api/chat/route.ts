@@ -1,11 +1,18 @@
 import { streamText, stepCountIs, tool } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
-import { writeWidgetCode, rebuildWidget } from "@/lib/widget-runner";
+import {
+  writeWidgetFile,
+  readWidgetFile,
+  listWidgetFiles,
+  deleteWidgetFile,
+  addWidgetDependencies,
+  rebuildWidget,
+} from "@/lib/widget-runner";
 
-const SYSTEM_PROMPT = `You are a coding agent that builds a SINGLE React widget component.
+const SYSTEM_PROMPT = `You are a coding agent that builds React widget components.
 
-You write ONE file: App.tsx. The widget runs in a Vite + React environment inside a Docker container with all dependencies pre-installed.
+The widget runs in a Vite + React environment inside a Docker container. You can create multiple files under \`src/\` and install additional npm packages.
 
 ## What You Are Building
 
@@ -16,10 +23,26 @@ One focused widget — NOT an app, NOT a page, NOT a dashboard. The widget is em
 
 DO NOT recreate any of these. Just build the core content the user asks for.
 
+## File Structure
+
+\`src/App.tsx\` is the entry point. You can create additional files to keep things organized:
+
+\`\`\`
+src/
+  App.tsx                  ← entry point (default export: App)
+  components/Chart.tsx     ← reusable components
+  components/DataTable.tsx
+  hooks/useData.ts         ← custom hooks
+  lib/api.ts               ← utilities, API helpers
+  types.ts                 ← shared types
+\`\`\`
+
+All paths passed to tools must start with \`src/\`.
+
 ## Component Rules
 
-- Default export a React component named \`App\`
-- Write TypeScript JSX (.tsx)
+- \`src/App.tsx\` must default-export a React component named \`App\`
+- Write TypeScript JSX (.tsx) for components, TypeScript (.ts) for non-JSX
 - Root layout: \`<div className="w-full h-full overflow-auto p-4 space-y-4">…</div>\`
 
 ## Available Packages (pre-installed)
@@ -53,6 +76,10 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 Utility: \`import { cn } from "@/lib/utils";\`
 
+## Adding Extra Dependencies
+
+If you need a package that is NOT listed above, call \`addDependencies\` BEFORE writing code that imports it. The packages will be installed when the container builds.
+
 ## Data Fetching
 
 For external APIs, use the CORS proxy provided by the host app:
@@ -75,15 +102,21 @@ Use \`useEffect\` with \`setInterval\` for polling. Always handle loading and er
 ## Workflow
 
 1. Briefly explain what you will build (1-2 sentences max).
-2. Call \`writeCode\` with the complete App.tsx.
-3. If you spot issues, call \`writeCode\` again with the fix.
+2. If extra packages are needed, call \`addDependencies\` first.
+3. Write helper files first (\`writeFile\` for components, hooks, utils).
+4. Write \`src/App.tsx\` LAST — this triggers the container build.
+5. Use \`listFiles\` and \`readFile\` to inspect existing code when iterating.
+6. If you spot issues, fix the affected files and write \`src/App.tsx\` again to rebuild.
 
 Keep the widget focused, clean, and production-quality.`;
 
 export async function POST(request: Request) {
   const body = await request.json();
   const { messages, widgetId } = body as {
-    messages: Array<{ role: "user" | "assistant"; content: string }>;
+    messages: Array<{
+      role: "user" | "assistant";
+      content: string | Array<Record<string, unknown>>;
+    }>;
     widgetId: string;
   };
 
@@ -91,20 +124,73 @@ export async function POST(request: Request) {
     return Response.json({ error: "widgetId required" }, { status: 400 });
   }
 
-  const writeCodeTool = tool({
+  const writeFileTool = tool({
     description:
-      "Write the complete App.tsx source code. The widget preview will update immediately. Call again to iterate.",
+      "Write a file to the widget. Path must start with src/. Writing src/App.tsx triggers a container rebuild.",
     inputSchema: z.object({
-      code: z
+      path: z
         .string()
-        .describe("The complete App.tsx source code (TypeScript JSX)"),
+        .describe("Relative file path starting with src/ (e.g. src/App.tsx, src/components/Chart.tsx)"),
+      content: z.string().describe("The complete file content"),
     }),
-    execute: async ({ code }) => {
-      // Write to disk so Docker container can pick it up
-      await writeWidgetCode(widgetId, code);
-      // Trigger container rebuild (async, don't block)
-      rebuildWidget(widgetId).catch(console.error);
-      return { success: true };
+    execute: async ({ path, content }) => {
+      await writeWidgetFile(widgetId, path, content);
+      if (path === "src/App.tsx") {
+        rebuildWidget(widgetId).catch(console.error);
+      }
+      return { success: true, path };
+    },
+  });
+
+  const readFileTool = tool({
+    description: "Read a file from the widget source.",
+    inputSchema: z.object({
+      path: z
+        .string()
+        .describe("Relative file path starting with src/"),
+    }),
+    execute: async ({ path }) => {
+      const content = await readWidgetFile(widgetId, path);
+      if (content === null) return { error: "File not found", path };
+      return { content, path };
+    },
+  });
+
+  const listFilesTool = tool({
+    description:
+      "List all files in the widget's src/ directory.",
+    inputSchema: z.object({}),
+    execute: async () => {
+      const files = await listWidgetFiles(widgetId);
+      return { files };
+    },
+  });
+
+  const deleteFileTool = tool({
+    description:
+      "Delete a file from the widget. Cannot delete src/App.tsx.",
+    inputSchema: z.object({
+      path: z
+        .string()
+        .describe("Relative file path starting with src/"),
+    }),
+    execute: async ({ path }) => {
+      await deleteWidgetFile(widgetId, path);
+      return { success: true, path };
+    },
+  });
+
+  const addDependenciesTool = tool({
+    description:
+      "Install additional npm packages for this widget. Call BEFORE writing code that imports them.",
+    inputSchema: z.object({
+      packages: z
+        .array(z.string())
+        .describe("Package names to install (e.g. [\"three\", \"@react-three/fiber\"])"),
+    }),
+    execute: async ({ packages }) => {
+      const all = await addWidgetDependencies(widgetId, packages);
+      return { installed: all };
     },
   });
 
@@ -115,7 +201,11 @@ export async function POST(request: Request) {
     system: SYSTEM_PROMPT,
     messages,
     tools: {
-      writeCode: writeCodeTool,
+      writeFile: writeFileTool,
+      readFile: readFileTool,
+      listFiles: listFilesTool,
+      deleteFile: deleteFileTool,
+      addDependencies: addDependenciesTool,
       web_search: webSearchTool,
     },
     stopWhen: stepCountIs(40),
@@ -133,7 +223,7 @@ export async function POST(request: Request) {
     async start(controller) {
       const send = (data: unknown) => {
         controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
+          encoder.encode(`data: ${JSON.stringify(data)}\n\n`),
         );
       };
 
@@ -150,10 +240,39 @@ export async function POST(request: Request) {
 
             case "tool-call": {
               const input = part.input as Record<string, unknown> | undefined;
-              if (part.toolName === "writeCode") {
-                // Stream the code to the client so it can update the store
-                send({ type: "widget-code", code: input?.code });
-                send({ type: "tool-call", toolName: "writeCode", args: {} });
+              if (part.toolName === "writeFile") {
+                if (input?.path === "src/App.tsx") {
+                  send({ type: "widget-code", code: input?.content });
+                }
+                send({
+                  type: "tool-call",
+                  toolName: "writeFile",
+                  args: { path: input?.path },
+                });
+              } else if (part.toolName === "readFile") {
+                send({
+                  type: "tool-call",
+                  toolName: "readFile",
+                  args: { path: input?.path },
+                });
+              } else if (part.toolName === "listFiles") {
+                send({
+                  type: "tool-call",
+                  toolName: "listFiles",
+                  args: {},
+                });
+              } else if (part.toolName === "deleteFile") {
+                send({
+                  type: "tool-call",
+                  toolName: "deleteFile",
+                  args: { path: input?.path },
+                });
+              } else if (part.toolName === "addDependencies") {
+                send({
+                  type: "tool-call",
+                  toolName: "addDependencies",
+                  args: { packages: input?.packages },
+                });
               } else if (part.toolName === "web_search") {
                 send({
                   type: "tool-call",
@@ -165,7 +284,6 @@ export async function POST(request: Request) {
             }
 
             case "tool-result":
-              // No need to send tool results to client for writeCode
               break;
 
             case "error":

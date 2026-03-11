@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, type ComponentProps, type FormEventHandler, type KeyboardEvent } from "react";
-import { CornerDownLeft } from "lucide-react";
+import { useCallback, useRef, type ComponentProps, type FormEventHandler, type KeyboardEvent } from "react";
+import { CornerDownLeft, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -72,5 +72,62 @@ export function PromptInputSubmit({
       {children ?? <CornerDownLeft className="size-4" />}
       <span className="sr-only">Send message</span>
     </Button>
+  );
+}
+
+export function PromptInputActions({
+  className,
+  children,
+  ...props
+}: ComponentProps<"div">) {
+  return (
+    <div className={cn("flex items-center gap-1", className)} {...props}>
+      {children}
+    </div>
+  );
+}
+
+const ACCEPT_TYPES = "image/png,image/jpeg,image/gif,image/webp,application/pdf";
+
+export function PromptInputFileUpload({
+  className,
+  onFiles,
+  accept = ACCEPT_TYPES,
+  disabled,
+  ...props
+}: Omit<ComponentProps<typeof Button>, "onClick"> & {
+  onFiles?: (files: FileList) => void;
+  accept?: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <>
+      <input
+        type="file"
+        ref={inputRef}
+        className="hidden"
+        accept={accept}
+        multiple
+        onChange={(e) => {
+          if (e.target.files?.length) {
+            onFiles?.(e.target.files);
+            e.target.value = "";
+          }
+        }}
+      />
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className={cn("text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800", className)}
+        onClick={() => inputRef.current?.click()}
+        disabled={disabled}
+        {...props}
+      >
+        <Paperclip className="size-3.5" />
+        <span className="sr-only">Attach files</span>
+      </Button>
+    </>
   );
 }

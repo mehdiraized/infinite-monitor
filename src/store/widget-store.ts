@@ -2,11 +2,19 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { LayoutItem } from "react-grid-layout";
 
+export interface MessageAttachment {
+  name: string;
+  type: string;
+  size: number;
+  url: string;
+}
+
 export interface WidgetMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   reasoning?: string;
+  attachments?: MessageAttachment[];
 }
 
 export interface Widget {

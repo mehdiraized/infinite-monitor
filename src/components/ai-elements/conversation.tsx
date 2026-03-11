@@ -90,7 +90,7 @@ export function ConversationContent({
   return (
     <div
       ref={contentRef}
-      className={cn("flex-1 overflow-y-auto px-4 py-4", className)}
+      className={cn("flex-1 overflow-y-auto px-5 py-4", className)}
       {...props}
     >
       <div className="flex min-h-full flex-col gap-6">{children}</div>

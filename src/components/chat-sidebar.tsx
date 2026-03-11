@@ -1,13 +1,13 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import {
   Reasoning,
   ReasoningContent,
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
-import { MessageSquareDashed, X } from "lucide-react";
+import { MessageSquareDashed, Pencil, X } from "lucide-react";
 import { nanoid } from "nanoid";
 import {
   Conversation,
@@ -18,16 +18,33 @@ import {
 import {
   Message,
   MessageContent,
+  MessageAttachments,
   MessageResponse,
 } from "@/components/ai-elements/message";
 import {
   PromptInput,
   PromptInputSubmit,
   PromptInputTextarea,
+  PromptInputFileUpload,
 } from "@/components/ai-elements/prompt-input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useWidgetStore } from "@/store/widget-store";
+import { useWidgetStore, type WidgetMessage, type MessageAttachment } from "@/store/widget-store";
+
+interface PendingFile {
+  id: string;
+  file: File;
+  dataUrl: string;
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 const KITT_COUNT = 6;
 
@@ -99,7 +116,7 @@ function ConversationMessages({
   streamingMsgId,
   activeAction,
 }: {
-  messages: Array<{ id: string; role: "user" | "assistant"; content: string; reasoning?: string }>;
+  messages: WidgetMessage[];
   isStreaming: boolean;
   isReasoningStreaming: boolean;
   streamingMsgId: string | null;
@@ -115,9 +132,11 @@ function ConversationMessages({
               isStreaming={isReasoningStreaming && msg.id === streamingMsgId}
             />
           )}
-          {/* Show assistant message only once text starts arriving */}
           {(msg.role === "user" || msg.content) && (
             <Message from={msg.role}>
+              {msg.attachments && msg.attachments.length > 0 && (
+                <MessageAttachments attachments={msg.attachments} />
+              )}
               <MessageContent>
                 <MessageResponse>{msg.content}</MessageResponse>
               </MessageContent>
@@ -158,7 +177,7 @@ function updateAssistantMessage(
 
 async function streamToWidget(
   widgetId: string,
-  messages: Array<{ role: "user" | "assistant"; content: string }>
+  messages: Array<{ role: "user" | "assistant"; content: string | Record<string, unknown>[] }>
 ) {
   const {
     addMessage,
@@ -171,8 +190,19 @@ async function streamToWidget(
   } = useWidgetStore.getState();
 
   setStreaming(widgetId, true);
-  const assistantMsgId = nanoid();
-  addMessage(widgetId, { id: assistantMsgId, role: "assistant", content: "" });
+
+  let currentMsgId = nanoid();
+  addMessage(widgetId, { id: currentMsgId, role: "assistant", content: "" });
+
+  let fullText = "";
+  let hasEmittedText = false;
+
+  function startNewAssistantMessage() {
+    currentMsgId = nanoid();
+    fullText = "";
+    hasEmittedText = false;
+    addMessage(widgetId, { id: currentMsgId, role: "assistant", content: "" });
+  }
 
   try {
     const controller = new AbortController();
@@ -187,7 +217,7 @@ async function streamToWidget(
 
     if (!res.ok) {
       const err = await res.text();
-      updateAssistantMessage(widgetId, assistantMsgId, `Error: ${err}`);
+      updateAssistantMessage(widgetId, currentMsgId, `Error: ${err}`);
       return;
     }
 
@@ -195,7 +225,6 @@ async function streamToWidget(
     if (!reader) return;
 
     const decoder = new TextDecoder();
-    let fullText = "";
     let buffer = "";
 
     while (true) {
@@ -215,23 +244,41 @@ async function streamToWidget(
         try {
           const event = JSON.parse(payload);
           if (event.type === "reasoning-delta") {
+            if (hasEmittedText) {
+              startNewAssistantMessage();
+            }
             setReasoningStreaming(widgetId, true);
-            appendReasoningToMessage(widgetId, assistantMsgId, event.text);
+            appendReasoningToMessage(widgetId, currentMsgId, event.text);
           } else if (event.type === "text-delta") {
             setReasoningStreaming(widgetId, false);
+            hasEmittedText = true;
             fullText += event.text;
-            updateAssistantMessage(widgetId, assistantMsgId, fullText);
+            updateAssistantMessage(widgetId, currentMsgId, fullText);
           } else if (event.type === "widget-code") {
             if (event.code) {
               setWidgetCode(widgetId, event.code);
               setCurrentAction(widgetId, "Building widget…");
-              // Bump iframe version after a delay so the container has time to rebuild
               setTimeout(() => bumpIframeVersion(widgetId), 15000);
             }
           } else if (event.type === "tool-call") {
             let action = "";
-            if (event.toolName === "writeCode") {
-              action = "Writing widget code";
+            if (event.toolName === "writeFile") {
+              const filePath = event.args?.path ?? "";
+              action =
+                filePath === "src/App.tsx"
+                  ? "Writing widget code"
+                  : `Writing ${filePath}`;
+            } else if (event.toolName === "readFile") {
+              action = `Reading ${event.args?.path ?? "file"}`;
+            } else if (event.toolName === "listFiles") {
+              action = "Listing files";
+            } else if (event.toolName === "deleteFile") {
+              action = `Deleting ${event.args?.path ?? "file"}`;
+            } else if (event.toolName === "addDependencies") {
+              const pkgs = event.args?.packages;
+              action = Array.isArray(pkgs)
+                ? `Installing ${pkgs.join(", ")}`
+                : "Installing dependencies";
             } else if (event.toolName === "web_search") {
               action = event.args?.query
                 ? `Searching "${event.args.query}"`
@@ -241,7 +288,7 @@ async function streamToWidget(
           } else if (event.type === "error") {
             updateAssistantMessage(
               widgetId,
-              assistantMsgId,
+              currentMsgId,
               `Error: ${event.error}`
             );
           }
@@ -254,7 +301,7 @@ async function streamToWidget(
     if ((err as Error).name !== "AbortError") {
       updateAssistantMessage(
         widgetId,
-        assistantMsgId,
+        currentMsgId,
         `Error: ${String(err)}`
       );
     }
@@ -303,6 +350,7 @@ export function ChatSidebar() {
   }, [isActiveStreaming, activeWidgetId]);
 
   const [input, setInput] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const inputRef = useRef(input);
   inputRef.current = input;
 
@@ -314,8 +362,40 @@ export function ChatSidebar() {
       draftInputs.set(prevWidgetIdRef.current, inputRef.current);
     }
     setInput(activeWidgetId ? (draftInputs.get(activeWidgetId) ?? "") : "");
+    setPendingFiles([]);
     prevWidgetIdRef.current = activeWidgetId;
   }, [activeWidgetId]);
+
+  const handleFiles = useCallback(async (fileList: FileList) => {
+    const added: PendingFile[] = [];
+    for (const file of Array.from(fileList)) {
+      const dataUrl = await readFileAsDataUrl(file);
+      added.push({ id: nanoid(), file, dataUrl });
+    }
+    setPendingFiles((prev) => [...prev, ...added]);
+  }, []);
+
+  const removeFile = useCallback((id: string) => {
+    setPendingFiles((prev) => prev.filter((f) => f.id !== id));
+  }, []);
+
+  const handlePaste = useCallback(
+    async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const items = Array.from(e.clipboardData.items);
+      const imageItems = items.filter((item) => item.type.startsWith("image/"));
+      if (imageItems.length === 0) return;
+      e.preventDefault();
+      const added: PendingFile[] = [];
+      for (const item of imageItems) {
+        const file = item.getAsFile();
+        if (!file) continue;
+        const dataUrl = await readFileAsDataUrl(file);
+        added.push({ id: nanoid(), file, dataUrl });
+      }
+      setPendingFiles((prev) => [...prev, ...added]);
+    },
+    []
+  );
 
   useEffect(() => {
     if (!activeWidget || activeWidget.messages.length > 0) return;
@@ -331,11 +411,15 @@ export function ChatSidebar() {
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!activeWidget || !input.trim() || isActiveStreaming) return;
+    const hasText = input.trim().length > 0;
+    const hasFiles = pendingFiles.length > 0;
+    if (!activeWidget || (!hasText && !hasFiles) || isActiveStreaming) return;
 
     const widgetId = activeWidget.id;
     const userContent = input.trim();
+    const filesToSend = [...pendingFiles];
     setInput("");
+    setPendingFiles([]);
     draftInputs.delete(widgetId);
 
     const currentWidget = useWidgetStore
@@ -347,16 +431,48 @@ export function ChatSidebar() {
       (m) => m.role === "user"
     );
 
+    let contentForApi: string | Record<string, unknown>[];
+    let attachments: MessageAttachment[] | undefined;
+
+    if (filesToSend.length > 0) {
+      const parts: Record<string, unknown>[] = [];
+      if (userContent) {
+        parts.push({ type: "text", text: userContent });
+      }
+      for (const pf of filesToSend) {
+        const base64 = pf.dataUrl.split(",")[1];
+        if (pf.file.type.startsWith("image/")) {
+          parts.push({ type: "image", image: base64, mimeType: pf.file.type });
+        } else {
+          parts.push({ type: "file", data: base64, mimeType: pf.file.type });
+        }
+      }
+      contentForApi = parts;
+      attachments = filesToSend.map((pf) => ({
+        name: pf.file.name,
+        type: pf.file.type,
+        size: pf.file.size,
+        url: pf.dataUrl,
+      }));
+    } else {
+      contentForApi = userContent;
+    }
+
     const messagesForApi = [
       ...currentWidget.messages
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({ role: m.role, content: m.content })),
-      { role: "user" as const, content: userContent },
+      { role: "user" as const, content: contentForApi },
     ];
 
-    addMessage(widgetId, { id: nanoid(), role: "user", content: userContent });
+    addMessage(widgetId, {
+      id: nanoid(),
+      role: "user",
+      content: userContent,
+      attachments,
+    });
 
-    if (isFirstUserMessage) {
+    if (isFirstUserMessage && userContent) {
       fetch("/api/generate-title", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -381,18 +497,21 @@ export function ChatSidebar() {
     >
       <aside
         aria-hidden={!isOpen}
-        className="flex h-full w-md flex-col border-l border-zinc-700 bg-black"
+        className="flex h-full w-md flex-col border-l border-zinc-800 bg-black"
       >
-        <div className="flex items-center justify-between gap-2 px-3 pt-3 pb-2">
-          <input
-            type="text"
-            value={activeWidget?.title ?? ""}
-            onChange={(e) => {
-              if (activeWidget) renameWidget(activeWidget.id, e.target.value);
-            }}
-            className="min-w-0 flex-1 bg-transparent text-xs font-medium uppercase tracking-wider text-zinc-100 outline-none placeholder:text-zinc-500"
-            placeholder="Widget name…"
-          />
+        <div className="flex items-center justify-between gap-2 px-5 pt-3 pb-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <Pencil className="size-3 shrink-0 text-zinc-600" />
+            <input
+              type="text"
+              value={activeWidget?.title ?? ""}
+              onChange={(e) => {
+                if (activeWidget) renameWidget(activeWidget.id, e.target.value);
+              }}
+              className="min-w-0 flex-1 bg-transparent text-xs font-medium uppercase tracking-wider text-zinc-100 outline-none placeholder:text-zinc-500"
+              placeholder="Widget name…"
+            />
+          </div>
           <Button
             type="button"
             variant="ghost"
@@ -430,11 +549,38 @@ export function ChatSidebar() {
           <ConversationScrollButton />
         </Conversation>
 
-        <div className="p-3">
+        <div className="px-5 py-3">
           <PromptInput onSubmit={handleSubmit}>
+            {pendingFiles.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {pendingFiles.map((pf) => (
+                  <div key={pf.id} className="group/file relative">
+                    {pf.file.type.startsWith("image/") ? (
+                      <img
+                        src={pf.dataUrl}
+                        alt={pf.file.name}
+                        className="h-10 w-auto max-w-[75px] object-cover border border-zinc-700"
+                      />
+                    ) : (
+                      <span className="inline-flex items-center gap-1 border border-zinc-700 bg-zinc-900 px-2 py-1 text-[10px] text-zinc-400">
+                        {pf.file.name}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeFile(pf.id)}
+                      className="absolute -top-1.5 -right-1.5 flex size-4 items-center justify-center bg-zinc-700 text-zinc-300 hover:bg-zinc-600 opacity-0 group-hover/file:opacity-100 transition-opacity"
+                    >
+                      <X className="size-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <PromptInputTextarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onPaste={handlePaste}
               placeholder="Describe the component you want to build…"
               disabled={isActiveStreaming}
             />
@@ -449,9 +595,15 @@ export function ChatSidebar() {
                   "Enter to send · Shift+Enter for newline"
                 )}
               </span>
-              <PromptInputSubmit
-                disabled={!input.trim() || !activeWidget || isActiveStreaming}
-              />
+              <div className="flex items-center gap-1">
+                <PromptInputFileUpload
+                  onFiles={handleFiles}
+                  disabled={isActiveStreaming}
+                />
+                <PromptInputSubmit
+                  disabled={(!input.trim() && pendingFiles.length === 0) || !activeWidget || isActiveStreaming}
+                />
+              </div>
             </div>
           </PromptInput>
         </div>

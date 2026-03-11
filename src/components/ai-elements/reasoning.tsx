@@ -27,6 +27,7 @@ import {
 import { Streamdown } from "streamdown";
 
 import { Shimmer } from "./shimmer";
+import { StreamdownBlock } from "./streamdown-block";
 
 interface ReasoningContextValue {
   isStreaming: boolean;
@@ -206,6 +207,7 @@ export type ReasoningContentProps = ComponentProps<
 };
 
 const streamdownPlugins = { cjk, code, math, mermaid };
+const shikiTheme: [string, string] = ["github-dark", "github-dark"];
 
 export const ReasoningContent = memo(
   ({ className, children, ...props }: ReasoningContentProps) => (
@@ -218,8 +220,11 @@ export const ReasoningContent = memo(
       {...props}
     >
       <Streamdown
-        className="prose prose-invert prose-xs max-w-none wrap-break-word [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_code]:text-xs! [&_code]:leading-normal! [&_code]:break-all! [&_pre]:text-xs! [&_pre_code]:text-xs! [&_a]:break-all!"
+        className="min-w-0 max-w-none text-xs leading-5 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:break-all"
+        BlockComponent={StreamdownBlock}
+        controls={{ code: false }}
         plugins={streamdownPlugins}
+        shikiTheme={shikiTheme}
       >
         {children}
       </Streamdown>
