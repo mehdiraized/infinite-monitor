@@ -32,8 +32,8 @@ export function MessageContent({
   return (
     <div
       className={cn(
-        "min-w-0 max-w-full overflow-hidden text-sm",
-        "group-data-[from=user]:rounded-2xl group-data-[from=user]:bg-zinc-800 group-data-[from=user]:px-4 group-data-[from=user]:py-3 group-data-[from=user]:text-zinc-100",
+        "min-w-0 max-w-full overflow-hidden text-xs",
+        "group-data-[from=user]:bg-zinc-800 group-data-[from=user]:px-4 group-data-[from=user]:py-3 group-data-[from=user]:text-zinc-100",
         "group-data-[from=assistant]:text-zinc-200",
         className
       )}
@@ -49,7 +49,7 @@ export const MessageResponse = memo(function MessageResponse({
   return (
     <Streamdown
       className={cn(
-        "prose prose-invert prose-sm max-w-none whitespace-pre-wrap wrap-break-word [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        "prose prose-invert prose-xs max-w-none wrap-break-word whitespace-pre-wrap [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:break-all [&_code]:break-all",
         className
       )}
       {...props}

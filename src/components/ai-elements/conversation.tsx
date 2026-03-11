@@ -139,7 +139,7 @@ export function ConversationScrollButton({
       size="icon-sm"
       variant="outline"
       className={cn(
-        "absolute right-4 bottom-4 rounded-full border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800",
+        "absolute right-4 bottom-4 rounded-none border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800",
         className
       )}
       onClick={scrollToBottom}

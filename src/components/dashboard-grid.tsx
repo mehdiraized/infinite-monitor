@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useState, useEffect } from "react";
 import { GridLayout, useContainerWidth } from "react-grid-layout";
 import type { Layout } from "react-grid-layout";
 import { LayoutGrid } from "lucide-react";
@@ -22,10 +22,32 @@ const ROW_HEIGHT = 80;
 const MARGIN = 12;
 
 export function DashboardGrid() {
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    const unsub = useWidgetStore.persist.onFinishHydration(() => setHydrated(true));
+    if (useWidgetStore.persist.hasHydrated()) setHydrated(true);
+    return unsub;
+  }, []);
+
   const widgets = useWidgetStore((s) => s.widgets);
   const updateLayouts = useWidgetStore((s) => s.updateLayouts);
   const removeWidget = useWidgetStore((s) => s.removeWidget);
   const { width, containerRef, mounted } = useContainerWidth();
+
+  const handleRemove = useCallback(
+    (id: string) => {
+      const widget = widgets.find((w) => w.id === id);
+      if (widget?.sandboxId) {
+        fetch("/api/sandbox", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sandboxId: widget.sandboxId }),
+        }).catch(() => {});
+      }
+      removeWidget(id);
+    },
+    [widgets, removeWidget]
+  );
 
   const layout: Layout = useMemo(
     () => widgets.map((w) => ({ ...w.layout })),
@@ -39,12 +61,16 @@ export function DashboardGrid() {
     [updateLayouts]
   );
 
+  if (!hydrated) {
+    return <div ref={containerRef} className="min-w-0 flex-1 w-full overflow-hidden" />;
+  }
+
   return (
     <div ref={containerRef} className="min-w-0 flex-1 w-full overflow-hidden">
       {widgets.length === 0 ? (
         <Empty className="h-full">
           <EmptyHeader>
-            <EmptyMedia variant="icon" className="rounded-lg bg-zinc-800 text-zinc-400">
+            <EmptyMedia variant="icon" className="rounded-none bg-zinc-800 text-zinc-400">
               <LayoutGrid />
             </EmptyMedia>
             <EmptyTitle className="text-zinc-300 uppercase tracking-widest">
@@ -83,7 +109,7 @@ export function DashboardGrid() {
               >
                 {widgets.map((widget) => (
                   <div key={widget.id} className="relative h-full">
-                    <WidgetCard widget={widget} onRemove={removeWidget} />
+                    <WidgetCard widget={widget} onRemove={handleRemove} />
                   </div>
                 ))}
               </GridLayout>

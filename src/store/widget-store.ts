@@ -6,6 +6,7 @@ export interface WidgetMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  reasoning?: string;
 }
 
 export interface Widget {
@@ -14,13 +15,25 @@ export interface Widget {
   description: string;
   messages: WidgetMessage[];
   layout: LayoutItem;
+  sandboxId: string | null;
+  previewUrl: string | null;
 }
 
 interface WidgetStore {
   widgets: Widget[];
   activeWidgetId: string | null;
+  streamingWidgetIds: string[];
+  currentActions: Record<string, string>;
+  reasoningStreamingIds: string[];
   addWidget: (title?: string, description?: string) => string;
   addMessage: (widgetId: string, message: WidgetMessage) => void;
+  renameWidget: (id: string, title: string) => void;
+  setSandboxInfo: (widgetId: string, sandboxId: string, previewUrl: string) => void;
+  clearSandboxInfo: (widgetId: string) => void;
+  setStreaming: (widgetId: string, streaming: boolean) => void;
+  setCurrentAction: (widgetId: string, action: string | null) => void;
+  appendReasoningToMessage: (widgetId: string, messageId: string, text: string) => void;
+  setReasoningStreaming: (widgetId: string, streaming: boolean) => void;
   removeWidget: (id: string) => void;
   setActiveWidget: (id: string | null) => void;
   updateLayouts: (layouts: readonly LayoutItem[]) => void;
@@ -63,6 +76,9 @@ export const useWidgetStore = create<WidgetStore>()(
     (set, get) => ({
       widgets: [],
       activeWidgetId: null,
+      streamingWidgetIds: [],
+      currentActions: {},
+      reasoningStreamingIds: [],
 
       addWidget: (title = "Untitled Widget", description = "") => {
         const { widgets } = get();
@@ -74,6 +90,8 @@ export const useWidgetStore = create<WidgetStore>()(
           title,
           description,
           messages: [],
+          sandboxId: null,
+          previewUrl: null,
           layout: {
             i: id,
             x: pos.x,
@@ -99,12 +117,90 @@ export const useWidgetStore = create<WidgetStore>()(
         });
       },
 
-      removeWidget: (id) => {
+      renameWidget: (id, title) => {
+        set({
+          widgets: get().widgets.map((w) =>
+            w.id === id ? { ...w, title } : w
+          ),
+        });
+      },
+
+      setSandboxInfo: (widgetId, sandboxId, previewUrl) => {
+        set({
+          widgets: get().widgets.map((w) =>
+            w.id === widgetId ? { ...w, sandboxId, previewUrl } : w
+          ),
+        });
+      },
+
+      clearSandboxInfo: (widgetId) => {
+        set({
+          widgets: get().widgets.map((w) =>
+            w.id === widgetId
+              ? { ...w, sandboxId: null, previewUrl: null }
+              : w
+          ),
+        });
+      },
+
+      setStreaming: (widgetId, streaming) => {
         set((state) => ({
-          widgets: state.widgets.filter((w) => w.id !== id),
-          activeWidgetId:
-            state.activeWidgetId === id ? null : state.activeWidgetId,
+          streamingWidgetIds: streaming
+            ? [...state.streamingWidgetIds.filter((id) => id !== widgetId), widgetId]
+            : state.streamingWidgetIds.filter((id) => id !== widgetId),
         }));
+      },
+
+      setCurrentAction: (widgetId, action) => {
+        set((state) => {
+          const next = { ...state.currentActions };
+          if (action === null) {
+            delete next[widgetId];
+          } else {
+            next[widgetId] = action;
+          }
+          return { currentActions: next };
+        });
+      },
+
+      appendReasoningToMessage: (widgetId, messageId, text) => {
+        set({
+          widgets: get().widgets.map((w) =>
+            w.id === widgetId
+              ? {
+                  ...w,
+                  messages: w.messages.map((m) =>
+                    m.id === messageId
+                      ? { ...m, reasoning: (m.reasoning ?? "") + text }
+                      : m
+                  ),
+                }
+              : w
+          ),
+        });
+      },
+
+      setReasoningStreaming: (widgetId, streaming) => {
+        set((state) => ({
+          reasoningStreamingIds: streaming
+            ? [...state.reasoningStreamingIds.filter((id) => id !== widgetId), widgetId]
+            : state.reasoningStreamingIds.filter((id) => id !== widgetId),
+        }));
+      },
+
+      removeWidget: (id) => {
+        set((state) => {
+          const nextActions = { ...state.currentActions };
+          delete nextActions[id];
+          return {
+            widgets: state.widgets.filter((w) => w.id !== id),
+            activeWidgetId:
+              state.activeWidgetId === id ? null : state.activeWidgetId,
+            streamingWidgetIds: state.streamingWidgetIds.filter((wid) => wid !== id),
+            reasoningStreamingIds: state.reasoningStreamingIds.filter((wid) => wid !== id),
+            currentActions: nextActions,
+          };
+        });
       },
 
       setActiveWidget: (id) => {
@@ -125,6 +221,26 @@ export const useWidgetStore = create<WidgetStore>()(
     }),
     {
       name: "infinite-monitor-widgets",
+      merge: (persisted, current) => {
+        const stored = persisted as Partial<WidgetStore> | undefined;
+        if (!stored) return current;
+        return {
+          ...current,
+          ...stored,
+          streamingWidgetIds: [],
+          currentActions: {},
+          reasoningStreamingIds: [],
+          widgets: (stored.widgets ?? []).map((w) => ({
+            ...w,
+            sandboxId: w.sandboxId ?? null,
+            previewUrl: w.previewUrl ?? null,
+            messages: (w.messages ?? []).map((m) => ({
+              ...m,
+              reasoning: m.reasoning ?? undefined,
+            })),
+          })),
+        };
+      },
     }
   )
 );

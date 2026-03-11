@@ -15,7 +15,7 @@ export function PromptInput({
 }) {
   return (
     <form
-      className={cn("flex flex-col gap-3 border border-zinc-800 bg-zinc-900/80 p-3", className)}
+      className={cn("flex flex-col gap-3", className)}
       onSubmit={onSubmit}
       {...props}
     >
@@ -45,7 +45,7 @@ export function PromptInputTextarea({
     <textarea
       rows={3}
       className={cn(
-        "min-h-20 w-full resize-none rounded-none border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-zinc-700",
+        "min-h-20 w-full resize-none rounded-none border border-zinc-700 bg-black px-2.5 py-2 text-xs text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-zinc-600",
         className
       )}
       onKeyDown={handleKeyDown}
