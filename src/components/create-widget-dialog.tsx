@@ -3,7 +3,7 @@
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWidgetStore } from "@/store/widget-store";
-import { syncWidgetToDb } from "@/lib/sync-db";
+import { scheduleSyncToServer } from "@/lib/sync-db";
 
 export function CreateWidgetDialog() {
   const addWidget = useWidgetStore((s) => s.addWidget);
@@ -16,8 +16,7 @@ export function CreateWidgetDialog() {
       onClick={() => {
         const id = addWidget();
         setActiveWidget(id);
-        const widget = useWidgetStore.getState().widgets.find((w) => w.id === id);
-        if (widget) syncWidgetToDb(widget);
+        scheduleSyncToServer();
       }}
     >
       <Plus className="h-4 w-4" />

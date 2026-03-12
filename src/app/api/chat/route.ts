@@ -9,7 +9,6 @@ import {
   addWidgetDependencies,
   rebuildWidget,
 } from "@/lib/widget-runner";
-import { updateWidgetCode, upsertWidget } from "@/db/widgets";
 
 const SYSTEM_PROMPT = `You are a coding agent that builds React widget components.
 
@@ -137,8 +136,6 @@ export async function POST(request: Request) {
     execute: async ({ path, content }) => {
       await writeWidgetFile(widgetId, path, content);
       if (path === "src/App.tsx") {
-        // Persist code to SQLite (source of truth for persistence)
-        upsertWidget({ id: widgetId, code: content });
         rebuildWidget(widgetId).catch(console.error);
       }
       return { success: true, path };
@@ -244,6 +241,7 @@ export async function POST(request: Request) {
             case "tool-call": {
               const input = part.input as Record<string, unknown> | undefined;
               if (part.toolName === "writeFile") {
+                send({ type: "widget-file", path: input?.path, content: input?.content });
                 if (input?.path === "src/App.tsx") {
                   send({ type: "widget-code", code: input?.content });
                 }

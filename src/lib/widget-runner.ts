@@ -1,11 +1,13 @@
 import Docker from "dockerode";
 import getPort, { portNumbers } from "get-port";
-import fs from "fs/promises";
-import path from "path";
-const docker = new Docker();
+import {
+  getWidgetFiles,
+  setWidgetFiles,
+  getWidget,
+  upsertWidget,
+} from "@/db/widgets";
 
-const WIDGET_BASE_PATH =
-  process.env.WIDGET_BASE_PATH || path.join(process.cwd(), "widgets");
+const docker = new Docker();
 
 const IMAGE_NAME = "widget-base:latest";
 const CONTAINER_NAME = "widget-runtime";
@@ -39,7 +41,6 @@ async function ensureRuntime(): Promise<number> {
   if (runtimeStarting) return runtimeStarting;
 
   runtimeStarting = (async () => {
-    // Remove any stale container with our name
     try {
       const old = docker.getContainer(CONTAINER_NAME);
       await old.stop().catch(() => {});
@@ -65,7 +66,6 @@ async function ensureRuntime(): Promise<number> {
     runtimeContainerId = container.id;
     runtimePort = port;
 
-    // Wait for serve to be listening
     await waitForReady(port, 30000);
     console.log(`[widget-runtime] Container started on port ${port}`);
 
@@ -81,10 +81,10 @@ async function ensureRuntime(): Promise<number> {
   }
 }
 
-// ── Exec helper that waits for completion ──
+// ── Exec helper ──
 
 async function execInRuntime(cmd: string): Promise<{ exitCode: number; output: string }> {
-  const port = await ensureRuntime();
+  await ensureRuntime();
   const container = docker.getContainer(runtimeContainerId!);
 
   const exec = await container.exec({
@@ -118,8 +118,8 @@ async function execInRuntime(cmd: string): Promise<{ exitCode: number; output: s
 const VALID_PACKAGE_RE = /^(@[\w.-]+\/)?[\w.-]+(@[\w.^~>=<| -]+)?$/;
 
 function sanitizePath(relativePath: string): string {
-  const normalized = path.posix.normalize(relativePath);
-  if (path.isAbsolute(normalized) || normalized.startsWith("..")) {
+  const normalized = relativePath.replace(/\\/g, "/");
+  if (normalized.startsWith("/") || normalized.includes("..")) {
     throw new Error(`Invalid path: ${relativePath}`);
   }
   if (!normalized.startsWith("src/")) {
@@ -136,7 +136,7 @@ function validatePackages(packages: string[]): void {
   }
 }
 
-// ── File operations (write to host disk as staging) ──
+// ── File operations (SQLite-backed) ──
 
 export async function writeWidgetFile(
   widgetId: string,
@@ -144,45 +144,32 @@ export async function writeWidgetFile(
   content: string,
 ): Promise<void> {
   const safePath = sanitizePath(relativePath);
-  const fullPath = path.join(WIDGET_BASE_PATH, widgetId, safePath);
-  await fs.mkdir(path.dirname(fullPath), { recursive: true });
-  await fs.writeFile(fullPath, content, "utf-8");
+  const files = getWidgetFiles(widgetId);
+  files[safePath] = content;
+
+  const existing = getWidget(widgetId);
+  if (existing) {
+    setWidgetFiles(widgetId, files);
+  } else {
+    upsertWidget({
+      id: widgetId,
+      code: safePath === "src/App.tsx" ? content : null,
+      filesJson: JSON.stringify(files),
+    });
+  }
 }
 
 export async function readWidgetFile(
   widgetId: string,
   relativePath: string,
 ): Promise<string | null> {
-  try {
-    const safePath = sanitizePath(relativePath);
-    const fullPath = path.join(WIDGET_BASE_PATH, widgetId, safePath);
-    return await fs.readFile(fullPath, "utf-8");
-  } catch {
-    return null;
-  }
+  const safePath = sanitizePath(relativePath);
+  const files = getWidgetFiles(widgetId);
+  return files[safePath] ?? null;
 }
 
 export async function listWidgetFiles(widgetId: string): Promise<string[]> {
-  const srcDir = path.join(WIDGET_BASE_PATH, widgetId, "src");
-  try {
-    return await walkDir(srcDir, srcDir);
-  } catch {
-    return [];
-  }
-}
-
-async function walkDir(dir: string, root: string): Promise<string[]> {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await walkDir(full, root)));
-    } else {
-      files.push("src/" + path.relative(root, full));
-    }
-  }
-  return files.sort();
+  return Object.keys(getWidgetFiles(widgetId)).sort();
 }
 
 export async function deleteWidgetFile(
@@ -193,27 +180,30 @@ export async function deleteWidgetFile(
   if (safePath === "src/App.tsx") {
     throw new Error("Cannot delete the entry point App.tsx");
   }
-  const fullPath = path.join(WIDGET_BASE_PATH, widgetId, safePath);
-  await fs.unlink(fullPath).catch(() => {});
+  const files = getWidgetFiles(widgetId);
+  delete files[safePath];
+  setWidgetFiles(widgetId, files);
 }
 
-// ── Dependencies ──
+// ── Dependencies (stored in files map as deps.json) ──
 
 export async function addWidgetDependencies(
   widgetId: string,
   packages: string[],
 ): Promise<string[]> {
   validatePackages(packages);
-  const depsPath = path.join(WIDGET_BASE_PATH, widgetId, "deps.json");
+  const files = getWidgetFiles(widgetId);
   let existing: string[] = [];
   try {
-    existing = JSON.parse(await fs.readFile(depsPath, "utf-8"));
+    if (files["deps.json"]) {
+      existing = JSON.parse(files["deps.json"]);
+    }
   } catch {
-    // no existing deps file yet
+    // ignore
   }
   const merged = [...new Set([...existing, ...packages])];
-  await fs.mkdir(path.dirname(depsPath), { recursive: true });
-  await fs.writeFile(depsPath, JSON.stringify(merged), "utf-8");
+  files["deps.json"] = JSON.stringify(merged);
+  setWidgetFiles(widgetId, files);
   return merged;
 }
 
@@ -226,19 +216,28 @@ const widgetStatuses = new Map<string, WidgetStatus>();
 
 async function doBuild(widgetId: string): Promise<void> {
   const port = await ensureRuntime();
-  const widgetDir = path.join(WIDGET_BASE_PATH, widgetId);
   const container = docker.getContainer(runtimeContainerId!);
 
   widgetStatuses.set(widgetId, { status: "building", port });
 
   try {
-    // Inject widget files via tar archive using putArchive
-    const srcDir = path.join(widgetDir, "src");
-    const tarStream = await createTarFromDir(widgetId, widgetDir);
+    const files = getWidgetFiles(widgetId);
+    if (!files["src/App.tsx"]) {
+      widgetStatuses.set(widgetId, { status: "error", port });
+      console.error(`[widget-runtime] No src/App.tsx for ${widgetId}`);
+      return;
+    }
+
+    // Inject files via tar archive
+    const tarStream = createTarFromFiles(widgetId, files);
     await container.putArchive(tarStream, { path: "/app/widgets/" });
 
-    // Build script: set up the workspace, then vite build
-    const setupAndBuild = [
+    // Set up workspace and build
+    const depsInstall = files["deps.json"]
+      ? `cd /app/widgets/${widgetId} && npm install --no-save $(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('deps.json','utf8')).join(' '))") 2>/dev/null || true`
+      : "true";
+
+    const buildCmd = [
       `mkdir -p /app/widgets/${widgetId}/src /app/dist/${widgetId}`,
       `cp /base/vite.config.ts /base/tsconfig.json /base/postcss.config.js /base/tailwind.config.ts /base/index.html /base/package.json /app/widgets/${widgetId}/`,
       `ln -sf /base/node_modules /app/widgets/${widgetId}/node_modules`,
@@ -246,13 +245,11 @@ async function doBuild(widgetId: string): Promise<void> {
       `test -d /base/src/lib && cp -r /base/src/lib /app/widgets/${widgetId}/src/ || true`,
       `cp /base/src/index.css /app/widgets/${widgetId}/src/index.css`,
       `cp /base/src/main.tsx /app/widgets/${widgetId}/src/main.tsx`,
-      // Install extra deps if any
-      `if [ -f /app/widgets/${widgetId}/deps.json ]; then cd /app/widgets/${widgetId} && npm install --no-save $(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('deps.json','utf8')).join(' '))") 2>/dev/null || true; fi`,
-      // Vite build into the dist directory
+      depsInstall,
       `cd /app/widgets/${widgetId} && npx vite build --outDir /app/dist/${widgetId} 2>&1`,
     ].join(" && ");
 
-    const result = await execInRuntime(setupAndBuild);
+    const result = await execInRuntime(buildCmd);
 
     if (result.exitCode !== 0) {
       console.error(`[widget-runtime] Build failed for ${widgetId}:`, result.output);
@@ -268,50 +265,52 @@ async function doBuild(widgetId: string): Promise<void> {
   }
 }
 
-async function createTarFromDir(widgetId: string, widgetDir: string): Promise<Buffer> {
-  const { pack } = await import("tar-stream");
-  const p = pack();
-  const chunks: Buffer[] = [];
+function createTarFromFiles(widgetId: string, files: Record<string, string>): Buffer {
+  // Simple tar implementation without external deps
+  const entries: Buffer[] = [];
 
-  const srcDir = path.join(widgetDir, "src");
-
-  async function addDir(dir: string, base: string) {
-    let entries;
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      const archivePath = path.join(base, entry.name);
-      if (entry.isDirectory()) {
-        await addDir(fullPath, archivePath);
-      } else {
-        const content = await fs.readFile(fullPath);
-        p.entry({ name: archivePath }, content);
-      }
+  for (const [filePath, content] of Object.entries(files)) {
+    if (filePath === "deps.json") {
+      entries.push(createTarEntry(`${widgetId}/deps.json`, Buffer.from(content)));
+    } else {
+      entries.push(createTarEntry(`${widgetId}/${filePath}`, Buffer.from(content)));
     }
   }
 
-  // Add src/ files under <widgetId>/src/
-  await addDir(srcDir, `${widgetId}/src`);
+  // Two 512-byte zero blocks mark end of archive
+  entries.push(Buffer.alloc(1024));
+  return Buffer.concat(entries);
+}
 
-  // Add deps.json if it exists
-  try {
-    const deps = await fs.readFile(path.join(widgetDir, "deps.json"));
-    p.entry({ name: `${widgetId}/deps.json` }, deps);
-  } catch {
-    // No deps.json
-  }
+function createTarEntry(name: string, data: Buffer): Buffer {
+  const header = Buffer.alloc(512);
+  const nameBytes = Buffer.from(name, "utf-8");
+  nameBytes.copy(header, 0, 0, Math.min(nameBytes.length, 100));
 
-  p.finalize();
+  // File mode
+  Buffer.from("0000644\0", "utf-8").copy(header, 100);
+  // Owner/group ID
+  Buffer.from("0001000\0", "utf-8").copy(header, 108);
+  Buffer.from("0001000\0", "utf-8").copy(header, 116);
+  // File size in octal
+  Buffer.from(data.length.toString(8).padStart(11, "0") + "\0", "utf-8").copy(header, 124);
+  // Modification time
+  Buffer.from(Math.floor(Date.now() / 1000).toString(8).padStart(11, "0") + "\0", "utf-8").copy(header, 136);
+  // Type flag: regular file
+  header[156] = 48; // '0'
+  // Magic
+  Buffer.from("ustar\0", "utf-8").copy(header, 257);
+  Buffer.from("00", "utf-8").copy(header, 263);
 
-  return new Promise((resolve, reject) => {
-    p.on("data", (chunk: Buffer) => chunks.push(chunk));
-    p.on("end", () => resolve(Buffer.concat(chunks)));
-    p.on("error", reject);
-  });
+  // Compute checksum
+  Buffer.from("        ", "utf-8").copy(header, 148); // 8 spaces for checksum field
+  let checksum = 0;
+  for (let i = 0; i < 512; i++) checksum += header[i];
+  Buffer.from(checksum.toString(8).padStart(6, "0") + "\0 ", "utf-8").copy(header, 148);
+
+  // Pad data to 512-byte boundary
+  const padding = (512 - (data.length % 512)) % 512;
+  return Buffer.concat([header, data, Buffer.alloc(padding)]);
 }
 
 // ── Public API ──
@@ -348,7 +347,6 @@ export async function ensureWidget(widgetId: string): Promise<WidgetStatus> {
     // Not built yet
   }
 
-  // Trigger async build, return building status
   const status: WidgetStatus = { status: "building", port };
   widgetStatuses.set(widgetId, status);
   buildWidget(widgetId).catch((err) => {
@@ -377,16 +375,11 @@ export async function stopWidget(widgetId: string): Promise<void> {
   } catch {
     // Container might be gone
   }
-  // Clean up staging files from host disk
-  const widgetDir = path.join(WIDGET_BASE_PATH, widgetId);
-  fs.rm(widgetDir, { recursive: true, force: true }).catch(() => {});
 }
 
 export function getWidgetStatus(widgetId: string): WidgetStatus | null {
   return widgetStatuses.get(widgetId) ?? null;
 }
-
-// ── Health check ──
 
 async function waitForReady(port: number, timeout = 60000): Promise<void> {
   const start = Date.now();
@@ -395,7 +388,6 @@ async function waitForReady(port: number, timeout = 60000): Promise<void> {
       const res = await fetch(`http://localhost:${port}/`, {
         signal: AbortSignal.timeout(3000),
       });
-      // serve returns 200 for the directory listing even if /app/dist is empty
       if (res.ok || res.status === 404) return;
     } catch {
       // Not ready yet

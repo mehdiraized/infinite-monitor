@@ -3,6 +3,7 @@
 import { DashboardGrid } from "@/components/dashboard-grid";
 import { ChatSidebar } from "@/components/chat-sidebar";
 import { CreateWidgetDialog } from "@/components/create-widget-dialog";
+import { DashboardPicker } from "@/components/dashboard-picker";
 import { ScrambleText } from "@/components/scramble-text";
 
 export default function Home() {
@@ -20,7 +21,10 @@ export default function Home() {
               }
             />
           </h1>
-          <CreateWidgetDialog />
+          <div className="flex items-center gap-2">
+            <DashboardPicker />
+            <CreateWidgetDialog />
+          </div>
         </header>
         <DashboardGrid />
       </div>

@@ -30,10 +30,19 @@ export function DashboardGrid() {
     return unsub;
   }, []);
 
-  const widgets = useWidgetStore((s) => s.widgets);
+  const allWidgets = useWidgetStore((s) => s.widgets);
+  const dashboards = useWidgetStore((s) => s.dashboards);
+  const activeDashboardId = useWidgetStore((s) => s.activeDashboardId);
   const updateLayouts = useWidgetStore((s) => s.updateLayouts);
   const removeWidget = useWidgetStore((s) => s.removeWidget);
   const { width, containerRef, mounted } = useContainerWidth();
+
+  const activeDashboard = dashboards.find((d) => d.id === activeDashboardId);
+
+  const widgets = useMemo(() => {
+    if (!activeDashboard) return allWidgets;
+    return allWidgets.filter((w) => activeDashboard.widgetIds.includes(w.id));
+  }, [allWidgets, activeDashboard]);
 
   const handleRemove = useCallback(
     (id: string) => {

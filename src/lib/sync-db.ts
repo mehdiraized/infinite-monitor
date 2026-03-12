@@ -1,26 +1,44 @@
-import type { Widget } from "@/store/widget-store";
+import { useWidgetStore } from "@/store/widget-store";
 
-/** Fire-and-forget sync of a widget to the SQLite database via API */
-export function syncWidgetToDb(widget: Widget) {
-  fetch("/api/widgets", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      id: widget.id,
-      title: widget.title,
-      description: widget.description,
-      code: widget.code,
-      layout: widget.layout,
-      messages: widget.messages,
-    }),
-  }).catch(() => {});
+let syncTimeout: ReturnType<typeof setTimeout> | null = null;
+
+export function scheduleSyncToServer() {
+  if (syncTimeout) clearTimeout(syncTimeout);
+  syncTimeout = setTimeout(() => {
+    const { dashboards, widgets } = useWidgetStore.getState();
+    fetch("/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dashboards: dashboards.map((d) => ({
+          id: d.id,
+          title: d.title,
+          widgetIds: d.widgetIds,
+          createdAt: d.createdAt,
+        })),
+        widgets: widgets.map((w) => ({
+          id: w.id,
+          title: w.title,
+          description: w.description,
+          code: w.code,
+          files: w.files,
+          layout: w.layout,
+          messages: w.messages,
+        })),
+      }),
+    }).catch(() => {});
+  }, 2000);
 }
 
-/** Delete a widget from the database */
+export function syncWidgetToDb() {
+  scheduleSyncToServer();
+}
+
 export function deleteWidgetFromDb(widgetId: string) {
   fetch("/api/widgets", {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: widgetId }),
   }).catch(() => {});
+  scheduleSyncToServer();
 }
