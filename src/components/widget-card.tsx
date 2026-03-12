@@ -153,6 +153,14 @@ export function WidgetCard({ widget, onRemove }: WidgetCardProps) {
   );
 
   const widgetContent = () => {
+    if (widget.code && isBuilding) {
+      return (
+        <CardContent className="relative flex-1 min-h-0 p-0! overflow-hidden">
+          <StaticNoise />
+        </CardContent>
+      );
+    }
+
     if (widget.code) {
       return (
         <CardContent className="relative flex-1 min-h-0 p-0! overflow-hidden">
@@ -162,7 +170,6 @@ export function WidgetCard({ widget, onRemove }: WidgetCardProps) {
             className="absolute inset-0 w-full h-full border-0"
             title={widget.title}
           />
-          {isBuilding && <StaticNoise />}
         </CardContent>
       );
     }
