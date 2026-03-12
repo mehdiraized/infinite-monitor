@@ -240,6 +240,10 @@ export async function stopWidget(widgetId: string): Promise<void> {
     // Container may already be gone (AutoRemove: true)
   }
 
+  // Clean up transient build files from disk
+  const widgetDir = path.join(WIDGET_BASE_PATH, widgetId);
+  fs.rm(widgetDir, { recursive: true, force: true }).catch(() => {});
+
   registry.delete(widgetId);
 }
 
