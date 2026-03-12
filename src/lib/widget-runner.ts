@@ -2,22 +2,116 @@ import Docker from "dockerode";
 import getPort, { portNumbers } from "get-port";
 import fs from "fs/promises";
 import path from "path";
-
 const docker = new Docker();
 
 const WIDGET_BASE_PATH =
-  process.env.WIDGET_BASE_PATH ||
-  path.join(process.cwd(), "widgets");
+  process.env.WIDGET_BASE_PATH || path.join(process.cwd(), "widgets");
 
 const IMAGE_NAME = "widget-base:latest";
+const CONTAINER_NAME = "widget-runtime";
 
-interface WidgetContainer {
-  containerId: string;
+// ── Types ──
+
+interface WidgetStatus {
+  status: "building" | "ready" | "error";
   port: number;
-  status: "starting" | "building" | "ready" | "error";
 }
 
-const registry = new Map<string, WidgetContainer>();
+// ── Singleton runtime container ──
+
+let runtimePort: number | null = null;
+let runtimeContainerId: string | null = null;
+let runtimeStarting: Promise<number> | null = null;
+
+async function ensureRuntime(): Promise<number> {
+  if (runtimePort && runtimeContainerId) {
+    try {
+      const c = docker.getContainer(runtimeContainerId);
+      const info = await c.inspect();
+      if (info.State.Running) return runtimePort;
+    } catch {
+      // Container gone, recreate
+    }
+    runtimePort = null;
+    runtimeContainerId = null;
+  }
+
+  if (runtimeStarting) return runtimeStarting;
+
+  runtimeStarting = (async () => {
+    // Remove any stale container with our name
+    try {
+      const old = docker.getContainer(CONTAINER_NAME);
+      await old.stop().catch(() => {});
+      await old.remove({ force: true }).catch(() => {});
+    } catch {
+      // Doesn't exist
+    }
+
+    const port = await getPort({ port: portNumbers(3100, 3999) });
+
+    const container = await docker.createContainer({
+      Image: IMAGE_NAME,
+      name: CONTAINER_NAME,
+      ExposedPorts: { "3000/tcp": {} },
+      HostConfig: {
+        PortBindings: {
+          "3000/tcp": [{ HostPort: String(port) }],
+        },
+      },
+    });
+
+    await container.start();
+    runtimeContainerId = container.id;
+    runtimePort = port;
+
+    // Wait for serve to be listening
+    await waitForReady(port, 30000);
+    console.log(`[widget-runtime] Container started on port ${port}`);
+
+    runtimeStarting = null;
+    return port;
+  })();
+
+  try {
+    return await runtimeStarting;
+  } catch (err) {
+    runtimeStarting = null;
+    throw err;
+  }
+}
+
+// ── Exec helper that waits for completion ──
+
+async function execInRuntime(cmd: string): Promise<{ exitCode: number; output: string }> {
+  const port = await ensureRuntime();
+  const container = docker.getContainer(runtimeContainerId!);
+
+  const exec = await container.exec({
+    Cmd: ["sh", "-c", cmd],
+    AttachStdout: true,
+    AttachStderr: true,
+  });
+
+  return new Promise((resolve, reject) => {
+    exec.start({ hijack: true, stdin: false }, (err: Error | null, stream: NodeJS.ReadableStream | undefined) => {
+      if (err) return reject(err);
+      if (!stream) return reject(new Error("No stream from exec"));
+
+      const chunks: Buffer[] = [];
+      stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+      stream.on("end", () => {
+        exec.inspect().then((info: { ExitCode: number }) => {
+          resolve({
+            exitCode: info.ExitCode ?? 0,
+            output: Buffer.concat(chunks).toString("utf-8"),
+          });
+        }).catch(reject);
+      });
+      stream.on("error", reject);
+    });
+  });
+}
 
 // ── Security ──
 
@@ -42,7 +136,7 @@ function validatePackages(packages: string[]): void {
   }
 }
 
-// ── File operations ──
+// ── File operations (write to host disk as staging) ──
 
 export async function writeWidgetFile(
   widgetId: string,
@@ -68,9 +162,7 @@ export async function readWidgetFile(
   }
 }
 
-export async function listWidgetFiles(
-  widgetId: string,
-): Promise<string[]> {
+export async function listWidgetFiles(widgetId: string): Promise<string[]> {
   const srcDir = path.join(WIDGET_BASE_PATH, widgetId, "src");
   try {
     return await walkDir(srcDir, srcDir);
@@ -125,155 +217,190 @@ export async function addWidgetDependencies(
   return merged;
 }
 
-// ── Container management ──
+// ── Build mutex ──
 
-export async function ensureWidget(
-  widgetId: string,
-): Promise<WidgetContainer> {
-  const existing = registry.get(widgetId);
-  if (existing && existing.status === "ready") return existing;
-  if (existing && existing.status === "building") return existing;
-  return startWidget(widgetId);
+const buildLocks = new Map<string, Promise<void>>();
+const widgetStatuses = new Map<string, WidgetStatus>();
+
+// ── Build a widget inside the runtime container ──
+
+async function doBuild(widgetId: string): Promise<void> {
+  const port = await ensureRuntime();
+  const widgetDir = path.join(WIDGET_BASE_PATH, widgetId);
+  const container = docker.getContainer(runtimeContainerId!);
+
+  widgetStatuses.set(widgetId, { status: "building", port });
+
+  try {
+    // Inject widget files via tar archive using putArchive
+    const srcDir = path.join(widgetDir, "src");
+    const tarStream = await createTarFromDir(widgetId, widgetDir);
+    await container.putArchive(tarStream, { path: "/app/widgets/" });
+
+    // Build script: set up the workspace, then vite build
+    const setupAndBuild = [
+      `mkdir -p /app/widgets/${widgetId}/src /app/dist/${widgetId}`,
+      `cp /base/vite.config.ts /base/tsconfig.json /base/postcss.config.js /base/tailwind.config.ts /base/index.html /base/package.json /app/widgets/${widgetId}/`,
+      `ln -sf /base/node_modules /app/widgets/${widgetId}/node_modules`,
+      `test -d /base/src/components && cp -r /base/src/components /app/widgets/${widgetId}/src/ || true`,
+      `test -d /base/src/lib && cp -r /base/src/lib /app/widgets/${widgetId}/src/ || true`,
+      `cp /base/src/index.css /app/widgets/${widgetId}/src/index.css`,
+      `cp /base/src/main.tsx /app/widgets/${widgetId}/src/main.tsx`,
+      // Install extra deps if any
+      `if [ -f /app/widgets/${widgetId}/deps.json ]; then cd /app/widgets/${widgetId} && npm install --no-save $(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('deps.json','utf8')).join(' '))") 2>/dev/null || true; fi`,
+      // Vite build into the dist directory
+      `cd /app/widgets/${widgetId} && npx vite build --outDir /app/dist/${widgetId} 2>&1`,
+    ].join(" && ");
+
+    const result = await execInRuntime(setupAndBuild);
+
+    if (result.exitCode !== 0) {
+      console.error(`[widget-runtime] Build failed for ${widgetId}:`, result.output);
+      widgetStatuses.set(widgetId, { status: "error", port });
+      return;
+    }
+
+    console.log(`[widget-runtime] Widget ${widgetId} built successfully`);
+    widgetStatuses.set(widgetId, { status: "ready", port });
+  } catch (err) {
+    console.error(`[widget-runtime] Build error for ${widgetId}:`, err);
+    widgetStatuses.set(widgetId, { status: "error", port });
+  }
 }
 
-const MAX_PORT_RETRIES = 3;
+async function createTarFromDir(widgetId: string, widgetDir: string): Promise<Buffer> {
+  const { pack } = await import("tar-stream");
+  const p = pack();
+  const chunks: Buffer[] = [];
 
-async function startWidget(widgetId: string): Promise<WidgetContainer> {
-  await stopWidget(widgetId);
+  const srcDir = path.join(widgetDir, "src");
 
-  const widgetDir = path.join(WIDGET_BASE_PATH, widgetId);
-  await fs.mkdir(path.join(widgetDir, "src"), { recursive: true });
-
-  const entry: WidgetContainer = {
-    containerId: "",
-    port: 0,
-    status: "starting",
-  };
-  registry.set(widgetId, entry);
-
-  for (let attempt = 0; attempt < MAX_PORT_RETRIES; attempt++) {
-    const port = await getPort({ port: portNumbers(3100, 3999) });
-    entry.port = port;
-
+  async function addDir(dir: string, base: string) {
+    let entries;
     try {
-      const container = await docker.createContainer({
-        Image: IMAGE_NAME,
-        name: `widget-${widgetId}-${Date.now()}`,
-        Cmd: [
-          "sh",
-          "-c",
-          [
-            "cp -r /base/. /app",
-            "cp -r /widget/src/. /app/src/",
-            "if [ -f /widget/deps.json ]; then cd /app && npm install --no-save $(node -e \"process.stdout.write(JSON.parse(require('fs').readFileSync('/widget/deps.json','utf8')).join(' '))\"); fi",
-            "cd /app",
-            "npx vite build",
-            "npx vite preview --host 0.0.0.0 --port 3000",
-          ].join(" && "),
-        ],
-        ExposedPorts: { "3000/tcp": {} },
-        HostConfig: {
-          PortBindings: {
-            "3000/tcp": [{ HostPort: String(port) }],
-          },
-          Binds: [`${widgetDir}:/widget:ro`],
-          AutoRemove: true,
-        },
-      });
-
-      await container.start();
-      entry.containerId = container.id;
-      entry.status = "building";
-
-      waitForReady(port)
-        .then(() => {
-          entry.status = "ready";
-          console.log(
-            `[widget-runner] Widget ${widgetId} ready on port ${port}`,
-          );
-        })
-        .catch(() => {
-          entry.status = "error";
-          console.error(
-            `[widget-runner] Widget ${widgetId} failed to start`,
-          );
-        });
-
-      return entry;
-    } catch (err) {
-      const msg = String(err);
-      // Clean up the failed container if it was created but couldn't start
-      try {
-        const stale = docker.getContainer(`widget-${widgetId}-${Date.now()}`);
-        await stale.remove({ force: true }).catch(() => {});
-      } catch {
-        // Container may not exist
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      const archivePath = path.join(base, entry.name);
+      if (entry.isDirectory()) {
+        await addDir(fullPath, archivePath);
+      } else {
+        const content = await fs.readFile(fullPath);
+        p.entry({ name: archivePath }, content);
       }
-      if (
-        msg.includes("port is already allocated") &&
-        attempt < MAX_PORT_RETRIES - 1
-      ) {
-        console.warn(
-          `[widget-runner] Port ${port} conflict, retrying (${attempt + 1}/${MAX_PORT_RETRIES})`,
-        );
-        continue;
-      }
-      entry.status = "error";
-      console.error("[widget-runner] Failed to create container:", err);
-      return entry;
     }
   }
 
-  entry.status = "error";
-  return entry;
+  // Add src/ files under <widgetId>/src/
+  await addDir(srcDir, `${widgetId}/src`);
+
+  // Add deps.json if it exists
+  try {
+    const deps = await fs.readFile(path.join(widgetDir, "deps.json"));
+    p.entry({ name: `${widgetId}/deps.json` }, deps);
+  } catch {
+    // No deps.json
+  }
+
+  p.finalize();
+
+  return new Promise((resolve, reject) => {
+    p.on("data", (chunk: Buffer) => chunks.push(chunk));
+    p.on("end", () => resolve(Buffer.concat(chunks)));
+    p.on("error", reject);
+  });
+}
+
+// ── Public API ──
+
+export async function buildWidget(widgetId: string): Promise<void> {
+  const existing = buildLocks.get(widgetId);
+  if (existing) await existing;
+
+  const promise = doBuild(widgetId);
+  buildLocks.set(widgetId, promise);
+  try {
+    await promise;
+  } finally {
+    buildLocks.delete(widgetId);
+  }
+}
+
+export async function ensureWidget(widgetId: string): Promise<WidgetStatus> {
+  const port = await ensureRuntime();
+
+  const existing = widgetStatuses.get(widgetId);
+  if (existing && existing.status === "ready") return existing;
+  if (existing && existing.status === "building") return existing;
+
+  // Check if already built in the container
+  try {
+    const result = await execInRuntime(`test -f /app/dist/${widgetId}/index.html && echo exists`);
+    if (result.output.includes("exists")) {
+      const status: WidgetStatus = { status: "ready", port };
+      widgetStatuses.set(widgetId, status);
+      return status;
+    }
+  } catch {
+    // Not built yet
+  }
+
+  // Trigger async build, return building status
+  const status: WidgetStatus = { status: "building", port };
+  widgetStatuses.set(widgetId, status);
+  buildWidget(widgetId).catch((err) => {
+    console.error(`[widget-runtime] Background build failed for ${widgetId}:`, err);
+  });
+  return status;
+}
+
+export async function rebuildWidget(widgetId: string): Promise<WidgetStatus> {
+  const port = await ensureRuntime();
+  const status: WidgetStatus = { status: "building", port };
+  widgetStatuses.set(widgetId, status);
+
+  buildWidget(widgetId).catch((err) => {
+    console.error(`[widget-runtime] Rebuild failed for ${widgetId}:`, err);
+  });
+
+  return status;
 }
 
 export async function stopWidget(widgetId: string): Promise<void> {
-  const entry = registry.get(widgetId);
-  if (!entry || !entry.containerId) return;
-
+  widgetStatuses.delete(widgetId);
+  if (!runtimeContainerId) return;
   try {
-    const container = docker.getContainer(entry.containerId);
-    await container.stop().catch(() => {});
-    await container.remove().catch(() => {});
+    await execInRuntime(`rm -rf /app/dist/${widgetId} /app/widgets/${widgetId}`);
   } catch {
-    // Container may already be gone (AutoRemove: true)
+    // Container might be gone
   }
-
-  // Clean up transient build files from disk
+  // Clean up staging files from host disk
   const widgetDir = path.join(WIDGET_BASE_PATH, widgetId);
   fs.rm(widgetDir, { recursive: true, force: true }).catch(() => {});
-
-  registry.delete(widgetId);
 }
 
-export async function rebuildWidget(
-  widgetId: string,
-): Promise<WidgetContainer> {
-  return startWidget(widgetId);
+export function getWidgetStatus(widgetId: string): WidgetStatus | null {
+  return widgetStatuses.get(widgetId) ?? null;
 }
 
-export function getWidgetStatus(
-  widgetId: string,
-): WidgetContainer | null {
-  return registry.get(widgetId) ?? null;
-}
+// ── Health check ──
 
-async function waitForReady(
-  port: number,
-  timeout = 60000,
-): Promise<void> {
+async function waitForReady(port: number, timeout = 60000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     try {
       const res = await fetch(`http://localhost:${port}/`, {
         signal: AbortSignal.timeout(3000),
       });
+      // serve returns 200 for the directory listing even if /app/dist is empty
       if (res.ok || res.status === 404) return;
     } catch {
       // Not ready yet
     }
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`Widget did not start within ${timeout}ms`);
+  throw new Error(`Runtime container did not start within ${timeout}ms`);
 }

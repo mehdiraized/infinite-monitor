@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { ensureWidget, writeWidgetFile } from "@/lib/widget-runner";
+import { ensureWidget } from "@/lib/widget-runner";
 import { getWidgetCode } from "@/db/widgets";
 
 const LOADING_HTML = `<!DOCTYPE html>
@@ -20,28 +20,23 @@ export async function GET(
 ) {
   const { id, path: pathSegments } = await params;
 
-  // Read code from SQLite (source of truth)
   const code = getWidgetCode(id);
   if (!code) {
     return new Response("Widget not found", { status: 404 });
   }
 
-  // Write to disk so the Docker container can pick it up
-  await writeWidgetFile(id, "src/App.tsx", code);
+  const widget = await ensureWidget(id);
 
-  // Ensure container is running
-  const container = await ensureWidget(id);
-
-  // If still building, return loading HTML that auto-refreshes
-  if (container.status !== "ready") {
+  if (widget.status !== "ready") {
     return new Response(LOADING_HTML, {
       status: 200,
       headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   }
 
+  // Proxy to the single runtime container: /<widgetId>/<subPath>
   const subPath = pathSegments?.join("/") ?? "";
-  const targetUrl = `http://localhost:${container.port}/${subPath}${req.nextUrl.search}`;
+  const targetUrl = `http://localhost:${widget.port}/${id}/${subPath}${req.nextUrl.search}`;
 
   try {
     const upstream = await fetch(targetUrl, {
@@ -55,9 +50,6 @@ export async function GET(
     const contentType =
       upstream.headers.get("content-type") ?? "text/html";
 
-    // For the root HTML response, inject a <base> tag so relative asset
-    // paths (./assets/...) resolve correctly even though Next.js strips
-    // the trailing slash from the iframe URL.
     if (!subPath && contentType.includes("text/html")) {
       const html = await upstream.text();
       const baseTag = `<base href="/api/widget/${id}/">`;
