@@ -1,21 +1,56 @@
 "use client";
 
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useState, useEffect } from "react";
 import { GridLayout, useContainerWidth } from "react-grid-layout";
 import type { Layout } from "react-grid-layout";
+import { LayoutGrid } from "lucide-react";
 import { useWidgetStore } from "@/store/widget-store";
 import { WidgetCard } from "@/components/widget-card";
+import { deleteWidgetFromDb } from "@/lib/sync-db";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  EmptyDescription,
+  EmptyContent,
+} from "@/components/ui/empty";
+import { CreateWidgetDialog } from "@/components/create-widget-dialog";
 
 const COLS = 12;
 const ROW_HEIGHT = 80;
 const MARGIN = 12;
 
 export function DashboardGrid() {
-  const widgets = useWidgetStore((s) => s.widgets);
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    const unsub = useWidgetStore.persist.onFinishHydration(() => setHydrated(true));
+    if (useWidgetStore.persist.hasHydrated()) setHydrated(true);
+    return unsub;
+  }, []);
+
+  const allWidgets = useWidgetStore((s) => s.widgets);
+  const dashboards = useWidgetStore((s) => s.dashboards);
+  const activeDashboardId = useWidgetStore((s) => s.activeDashboardId);
   const updateLayouts = useWidgetStore((s) => s.updateLayouts);
   const removeWidget = useWidgetStore((s) => s.removeWidget);
   const { width, containerRef, mounted } = useContainerWidth();
+
+  const activeDashboard = dashboards.find((d) => d.id === activeDashboardId);
+
+  const widgets = useMemo(() => {
+    if (!activeDashboard) return allWidgets;
+    return allWidgets.filter((w) => activeDashboard.widgetIds.includes(w.id));
+  }, [allWidgets, activeDashboard]);
+
+  const handleRemove = useCallback(
+    (id: string) => {
+      removeWidget(id);
+      deleteWidgetFromDb(id);
+    },
+    [removeWidget]
+  );
 
   const layout: Layout = useMemo(
     () => widgets.map((w) => ({ ...w.layout })),
@@ -29,20 +64,30 @@ export function DashboardGrid() {
     [updateLayouts]
   );
 
+  if (!hydrated) {
+    return <div ref={containerRef} className="min-w-0 flex-1 w-full overflow-hidden" />;
+  }
+
   return (
-    <div ref={containerRef} className="flex-1 w-full overflow-hidden">
+    <div ref={containerRef} className="min-w-0 flex-1 w-full overflow-hidden">
       {widgets.length === 0 ? (
-        <div className="h-full flex items-center justify-center">
-          <div className="text-center space-y-3">
-            <div className="text-zinc-600 text-sm uppercase tracking-widest">
-              No widgets yet
-            </div>
-            <p className="text-zinc-700 text-xs max-w-xs">
-              Click &quot;Add Widget&quot; to create your first widget and start
-              building your dashboard.
-            </p>
-          </div>
-        </div>
+        <Empty className="h-full">
+          <EmptyHeader>
+            <EmptyMedia variant="icon" className="rounded-none bg-zinc-800 text-zinc-400">
+              <LayoutGrid />
+            </EmptyMedia>
+            <EmptyTitle className="text-zinc-300 uppercase tracking-widest">
+              No Widgets Yet
+            </EmptyTitle>
+            <EmptyDescription className="text-zinc-500 max-w-xs">
+              Get started by adding your first widget to build out your
+              monitoring dashboard.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <CreateWidgetDialog />
+          </EmptyContent>
+        </Empty>
       ) : (
         <ScrollArea className="h-full w-full">
           <div className="px-5 pt-1">
@@ -67,7 +112,7 @@ export function DashboardGrid() {
               >
                 {widgets.map((widget) => (
                   <div key={widget.id} className="relative h-full">
-                    <WidgetCard widget={widget} onRemove={removeWidget} />
+                    <WidgetCard widget={widget} onRemove={handleRemove} />
                   </div>
                 ))}
               </GridLayout>
