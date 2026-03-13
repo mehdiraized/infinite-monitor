@@ -1,6 +1,7 @@
 import { streamText, stepCountIs, tool } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
+import { createBashTool } from "bash-tool";
 import {
   writeWidgetFile,
   readWidgetFile,
@@ -118,6 +119,15 @@ Use \`useEffect\` with \`setInterval\` for polling. Always handle loading and er
 You are building one widget within a larger dashboard. Use \`listDashboardWidgets\` to see what other widgets exist — their titles, descriptions, and whether they have code. Use \`readWidgetCode\` to inspect a sibling widget's source code when you need to match API patterns, data formats, or styling conventions.
 
 Design your widget to complement the others. Don't duplicate what they already show.
+
+## Bash Tool
+
+You have access to a sandboxed \`bash\` tool for running shell commands. The environment is in-memory with no access to the real filesystem. Use it for:
+- Processing or transforming data (jq, awk, sed, grep, sort, etc.)
+- Quick calculations or logic
+- Prototyping API responses before writing widget code
+
+JavaScript execution is enabled via \`js-exec\`.
 
 Keep the widget focused, clean, and production-quality.`;
 
@@ -250,6 +260,10 @@ export async function POST(request: Request) {
     },
   });
 
+  const bashTool = createBashTool({
+    javascript: true,
+  });
+
   const webSearchTool = anthropic.tools.webSearch_20250305({ maxUses: 5 });
 
   const result = streamText({
@@ -264,6 +278,7 @@ export async function POST(request: Request) {
       addDependencies: addDependenciesTool,
       listDashboardWidgets: listDashboardWidgetsTool,
       readWidgetCode: readWidgetCodeTool,
+      bash: bashTool,
       web_search: webSearchTool,
     },
     stopWhen: stepCountIs(40),
@@ -344,6 +359,12 @@ export async function POST(request: Request) {
                   type: "tool-call",
                   toolName: "readWidgetCode",
                   args: { targetWidgetId: input?.targetWidgetId, path: input?.path },
+                });
+              } else if (part.toolName === "bash") {
+                send({
+                  type: "tool-call",
+                  toolName: "bash",
+                  args: { command: input?.command },
                 });
               } else if (part.toolName === "web_search") {
                 send({

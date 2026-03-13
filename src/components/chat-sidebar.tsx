@@ -304,6 +304,9 @@ async function streamToWidget(
               action = "Checking dashboard widgets";
             } else if (event.toolName === "readWidgetCode") {
               action = `Reading ${event.args?.targetWidgetId ?? "sibling"} code`;
+            } else if (event.toolName === "bash") {
+              const cmd = String(event.args?.command ?? "");
+              action = cmd.length > 40 ? `Running: ${cmd.slice(0, 40)}…` : `Running: ${cmd}`;
             } else if (event.toolName === "web_search") {
               action = event.args?.query
                 ? `Searching "${event.args.query}"`
