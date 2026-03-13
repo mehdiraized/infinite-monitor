@@ -14,7 +14,7 @@ export async function POST(request: Request) {
       title: string;
       description: string;
       code: string | null;
-      files: Record<string, string>;
+      files?: Record<string, string>;
       layout: unknown;
       messages: unknown[];
     }>;

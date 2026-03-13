@@ -144,7 +144,7 @@ export function syncState(data: {
     title: string;
     description: string;
     code: string | null;
-    files: Record<string, string>;
+    files?: Record<string, string>;
     layout: unknown;
     messages: unknown[];
   }>;
@@ -162,7 +162,7 @@ export function syncState(data: {
       title: w.title,
       description: w.description,
       code: w.code,
-      filesJson: JSON.stringify(w.files),
+      ...(w.files != null ? { filesJson: JSON.stringify(w.files) } : {}),
       layoutJson: JSON.stringify(w.layout),
       messagesJson: JSON.stringify(w.messages),
     });

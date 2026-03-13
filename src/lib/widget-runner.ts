@@ -17,6 +17,7 @@ const CONTAINER_NAME = "widget-runtime";
 interface WidgetStatus {
   status: "building" | "ready" | "error";
   port: number;
+  startedAt?: number;
 }
 
 // ── Singleton runtime container ──
@@ -25,6 +26,16 @@ let runtimePort: number | null = null;
 let runtimeContainerId: string | null = null;
 let runtimeStarting: Promise<number> | null = null;
 
+const DIST_VOLUME = "widget-dist";
+
+async function ensureVolume(): Promise<void> {
+  try {
+    await docker.getVolume(DIST_VOLUME).inspect();
+  } catch {
+    await docker.createVolume({ Name: DIST_VOLUME });
+  }
+}
+
 async function ensureRuntime(): Promise<number> {
   if (runtimePort && runtimeContainerId) {
     try {
@@ -32,22 +43,34 @@ async function ensureRuntime(): Promise<number> {
       const info = await c.inspect();
       if (info.State.Running) return runtimePort;
     } catch {
-      // Container gone, recreate
+      // Inspect failed — try to reattach by name before recreating
     }
     runtimePort = null;
     runtimeContainerId = null;
   }
 
+  // Try to reattach to an existing container by name
+  try {
+    const existing = docker.getContainer(CONTAINER_NAME);
+    const info = await existing.inspect();
+    if (info.State.Running) {
+      const hostPort = info.NetworkSettings?.Ports?.["3000/tcp"]?.[0]?.HostPort;
+      if (hostPort) {
+        runtimeContainerId = info.Id;
+        runtimePort = parseInt(hostPort, 10);
+        return runtimePort;
+      }
+    } else {
+      await existing.remove({ force: true }).catch(() => {});
+    }
+  } catch {
+    // Container doesn't exist
+  }
+
   if (runtimeStarting) return runtimeStarting;
 
   runtimeStarting = (async () => {
-    try {
-      const old = docker.getContainer(CONTAINER_NAME);
-      await old.stop().catch(() => {});
-      await old.remove({ force: true }).catch(() => {});
-    } catch {
-      // Doesn't exist
-    }
+    await ensureVolume();
 
     const port = await getPort({ port: portNumbers(3100, 3999) });
 
@@ -59,6 +82,7 @@ async function ensureRuntime(): Promise<number> {
         PortBindings: {
           "3000/tcp": [{ HostPort: String(port) }],
         },
+        Binds: [`${DIST_VOLUME}:/app/dist`],
       },
     });
 
@@ -328,12 +352,25 @@ export async function buildWidget(widgetId: string): Promise<void> {
   }
 }
 
+const BUILD_TIMEOUT_MS = 120_000;
+
 export async function ensureWidget(widgetId: string): Promise<WidgetStatus> {
   const port = await ensureRuntime();
 
   const existing = widgetStatuses.get(widgetId);
-  if (existing && existing.status === "ready") return existing;
-  if (existing && existing.status === "building") return existing;
+  if (existing && existing.status === "ready") {
+    if (existing.port === port) return existing;
+    // Port changed (container recreated) — re-check below
+  }
+
+  const isStaleBuilding =
+    existing?.status === "building" &&
+    existing.startedAt &&
+    Date.now() - existing.startedAt > BUILD_TIMEOUT_MS;
+
+  if (existing?.status === "building" && !isStaleBuilding) {
+    return existing;
+  }
 
   // Check if already built in the container
   try {
@@ -347,7 +384,7 @@ export async function ensureWidget(widgetId: string): Promise<WidgetStatus> {
     // Not built yet
   }
 
-  const status: WidgetStatus = { status: "building", port };
+  const status: WidgetStatus = { status: "building", port, startedAt: Date.now() };
   widgetStatuses.set(widgetId, status);
   buildWidget(widgetId).catch((err) => {
     console.error(`[widget-runtime] Background build failed for ${widgetId}:`, err);

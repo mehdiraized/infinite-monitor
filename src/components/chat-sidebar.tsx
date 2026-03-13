@@ -198,6 +198,7 @@ async function streamToWidget(
   const {
     addMessage,
     setWidgetCode,
+    setWidgetFile,
     bumpIframeVersion,
     setStreaming,
     setCurrentAction,
@@ -270,6 +271,10 @@ async function streamToWidget(
             hasEmittedText = true;
             fullText += event.text;
             updateAssistantMessage(widgetId, currentMsgId, fullText);
+          } else if (event.type === "widget-file") {
+            if (event.path && event.content) {
+              setWidgetFile(widgetId, event.path, event.content);
+            }
           } else if (event.type === "widget-code") {
             if (event.code) {
               setWidgetCode(widgetId, event.code);
@@ -295,12 +300,22 @@ async function streamToWidget(
               action = Array.isArray(pkgs)
                 ? `Installing ${pkgs.join(", ")}`
                 : "Installing dependencies";
+            } else if (event.toolName === "listDashboardWidgets") {
+              action = "Checking dashboard widgets";
+            } else if (event.toolName === "readWidgetCode") {
+              action = `Reading ${event.args?.targetWidgetId ?? "sibling"} code`;
             } else if (event.toolName === "web_search") {
               action = event.args?.query
                 ? `Searching "${event.args.query}"`
                 : "Searching the web";
             }
             if (action) setCurrentAction(widgetId, action);
+          } else if (event.type === "abort") {
+            updateAssistantMessage(
+              widgetId,
+              currentMsgId,
+              fullText || "[Interrupted]"
+            );
           } else if (event.type === "error") {
             updateAssistantMessage(
               widgetId,
@@ -314,12 +329,10 @@ async function streamToWidget(
       }
     }
   } catch (err) {
-    if ((err as Error).name !== "AbortError") {
-      updateAssistantMessage(
-        widgetId,
-        currentMsgId,
-        `Error: ${String(err)}`
-      );
+    if ((err as Error).name === "AbortError") {
+      updateAssistantMessage(widgetId, currentMsgId, fullText || "[Interrupted]");
+    } else {
+      updateAssistantMessage(widgetId, currentMsgId, `Error: ${String(err)}`);
     }
   } finally {
     abortControllers.delete(widgetId);
@@ -512,7 +525,7 @@ export function ChatSidebar() {
 
     const messagesForApi = [
       ...currentWidget.messages
-        .filter((m) => m.role === "user" || m.role === "assistant")
+        .filter((m) => (m.role === "user" || m.role === "assistant") && m.content)
         .map((m) => ({ role: m.role, content: m.content })),
       { role: "user" as const, content: contentForApi },
     ];

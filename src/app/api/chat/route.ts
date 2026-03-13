@@ -9,6 +9,11 @@ import {
   addWidgetDependencies,
   rebuildWidget,
 } from "@/lib/widget-runner";
+import {
+  getAllDashboards,
+  getWidget,
+  getWidgetFiles,
+} from "@/db/widgets";
 
 const SYSTEM_PROMPT = `You are a coding agent that builds React widget components.
 
@@ -108,6 +113,12 @@ Use \`useEffect\` with \`setInterval\` for polling. Always handle loading and er
 5. Use \`listFiles\` and \`readFile\` to inspect existing code when iterating.
 6. If you spot issues, fix the affected files and write \`src/App.tsx\` again to rebuild.
 
+## Dashboard Awareness
+
+You are building one widget within a larger dashboard. Use \`listDashboardWidgets\` to see what other widgets exist — their titles, descriptions, and whether they have code. Use \`readWidgetCode\` to inspect a sibling widget's source code when you need to match API patterns, data formats, or styling conventions.
+
+Design your widget to complement the others. Don't duplicate what they already show.
+
 Keep the widget focused, clean, and production-quality.`;
 
 export async function POST(request: Request) {
@@ -194,6 +205,51 @@ export async function POST(request: Request) {
     },
   });
 
+  const listDashboardWidgetsTool = tool({
+    description:
+      "List all widgets on the same dashboard as the current widget. Returns titles, descriptions, and whether they have code built. Use this to understand the dashboard context and avoid duplicating what other widgets already show.",
+    inputSchema: z.object({}),
+    execute: async () => {
+      const allDashboards = getAllDashboards();
+      const parentDashboard = allDashboards.find((d) => {
+        const ids: string[] = d.widgetIdsJson ? JSON.parse(d.widgetIdsJson) : [];
+        return ids.includes(widgetId);
+      });
+      if (!parentDashboard) return { dashboard: null, widgets: [] };
+
+      const widgetIds: string[] = JSON.parse(parentDashboard.widgetIdsJson || "[]");
+      const siblings = widgetIds
+        .filter((id) => id !== widgetId)
+        .map((id) => {
+          const w = getWidget(id);
+          if (!w) return null;
+          return { id: w.id, title: w.title, description: w.description, hasCode: !!w.code };
+        })
+        .filter(Boolean);
+
+      return { dashboard: parentDashboard.title, currentWidgetId: widgetId, widgets: siblings };
+    },
+  });
+
+  const readWidgetCodeTool = tool({
+    description:
+      "Read the source code of another widget on the dashboard. Use this to match API patterns, data formats, or styling conventions used by sibling widgets.",
+    inputSchema: z.object({
+      targetWidgetId: z.string().describe("The ID of the sibling widget to read"),
+      path: z
+        .string()
+        .default("src/App.tsx")
+        .describe("File path to read (default: src/App.tsx)"),
+    }),
+    execute: async ({ targetWidgetId, path }) => {
+      const files = getWidgetFiles(targetWidgetId);
+      const content = files[path];
+      if (!content) return { error: "File not found", targetWidgetId, path };
+      const w = getWidget(targetWidgetId);
+      return { title: w?.title, path, content };
+    },
+  });
+
   const webSearchTool = anthropic.tools.webSearch_20250305({ maxUses: 5 });
 
   const result = streamText({
@@ -206,9 +262,12 @@ export async function POST(request: Request) {
       listFiles: listFilesTool,
       deleteFile: deleteFileTool,
       addDependencies: addDependenciesTool,
+      listDashboardWidgets: listDashboardWidgetsTool,
+      readWidgetCode: readWidgetCodeTool,
       web_search: webSearchTool,
     },
     stopWhen: stepCountIs(40),
+    abortSignal: request.signal,
     providerOptions: {
       anthropic: {
         thinking: { type: "adaptive" },
@@ -274,6 +333,18 @@ export async function POST(request: Request) {
                   toolName: "addDependencies",
                   args: { packages: input?.packages },
                 });
+              } else if (part.toolName === "listDashboardWidgets") {
+                send({
+                  type: "tool-call",
+                  toolName: "listDashboardWidgets",
+                  args: {},
+                });
+              } else if (part.toolName === "readWidgetCode") {
+                send({
+                  type: "tool-call",
+                  toolName: "readWidgetCode",
+                  args: { targetWidgetId: input?.targetWidgetId, path: input?.path },
+                });
               } else if (part.toolName === "web_search") {
                 send({
                   type: "tool-call",
@@ -285,6 +356,10 @@ export async function POST(request: Request) {
             }
 
             case "tool-result":
+              break;
+
+            case "abort":
+              send({ type: "abort" });
               break;
 
             case "error":

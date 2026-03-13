@@ -21,7 +21,6 @@ export function scheduleSyncToServer() {
           title: w.title,
           description: w.description,
           code: w.code,
-          files: w.files,
           layout: w.layout,
           messages: w.messages,
         })),
