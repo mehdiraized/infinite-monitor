@@ -32,6 +32,7 @@ export async function GET() {
       description: config.description,
       icon: config.icon,
       widgetCount: widgets.length,
+      preview: widgets.map((w) => (w as { title: string }).title),
       widgets,
     };
   }).filter(Boolean);

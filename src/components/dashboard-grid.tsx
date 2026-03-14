@@ -19,6 +19,7 @@ interface Template {
   description: string;
   icon: string;
   widgetCount: number;
+  preview: string[];
   widgets: Array<{
     title: string;
     description: string;
@@ -33,6 +34,28 @@ const ICON_MAP: Record<string, typeof TrendingUp> = {
   globe: Globe,
   shield: Shield,
 };
+
+function MiniGrid({ titles }: { titles: string[] }) {
+  return (
+    <div className="w-full bg-zinc-950 border border-zinc-800/50 p-2 grid grid-cols-3 gap-1 h-28 overflow-hidden">
+      {titles.slice(0, 9).map((title, i) => (
+        <div
+          key={i}
+          className="bg-zinc-800/60 px-1.5 py-1 overflow-hidden"
+        >
+          <div className="text-[7px] text-zinc-500 uppercase tracking-wider truncate leading-tight">
+            {title}
+          </div>
+          <div className="mt-1 space-y-0.5">
+            <div className="h-[3px] bg-zinc-700/50 w-full" />
+            <div className="h-[3px] bg-zinc-700/30 w-3/4" />
+            <div className="h-[3px] bg-zinc-700/20 w-1/2" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function TemplateGallery() {
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -62,11 +85,11 @@ function TemplateGallery() {
 
   if (loading) {
     return (
-      <div className="w-full max-w-3xl mx-auto px-8">
-        <p className="text-[11px] text-zinc-600 uppercase tracking-wider mb-3">Templates</p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="w-full max-w-5xl mx-auto px-8">
+        <p className="text-[11px] text-zinc-600 uppercase tracking-wider mb-4">Templates</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-36 bg-zinc-800/50 animate-pulse" />
+            <div key={i} className="h-56 bg-zinc-800/30 animate-pulse" />
           ))}
         </div>
       </div>
@@ -76,9 +99,9 @@ function TemplateGallery() {
   if (templates.length === 0) return null;
 
   return (
-    <div className="w-full max-w-3xl mx-auto px-8">
-      <p className="text-[11px] text-zinc-600 uppercase tracking-wider mb-3">Or start from a template</p>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div className="w-full max-w-5xl mx-auto px-8">
+      <p className="text-[11px] text-zinc-600 uppercase tracking-wider mb-4">Or start from a template</p>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {templates.map((template) => {
           const Icon = ICON_MAP[template.icon] || LayoutGrid;
           const isApplying = applying === template.name;
@@ -87,19 +110,22 @@ function TemplateGallery() {
               key={template.name}
               onClick={() => handleApply(template)}
               disabled={isApplying}
-              className="group relative flex flex-col items-start gap-3 p-5 bg-zinc-900/50 border border-zinc-800 hover:border-zinc-600 hover:bg-zinc-900 transition-all text-left disabled:opacity-50"
+              className="group relative flex flex-col bg-zinc-900/30 border border-zinc-800 hover:border-zinc-600 hover:bg-zinc-900/60 transition-all text-left disabled:opacity-50 overflow-hidden"
             >
-              <div className="flex items-center gap-2">
-                <Icon className="w-4 h-4 text-zinc-500 group-hover:text-zinc-300 transition-colors" />
-                <span className="text-xs font-medium uppercase tracking-wider text-zinc-300">
-                  {template.name}
-                </span>
-              </div>
-              <p className="text-[11px] text-zinc-500 leading-relaxed">
-                {template.description}
-              </p>
-              <div className="text-[10px] text-zinc-600 mt-auto">
-                {template.widgetCount} widgets
+              <MiniGrid titles={template.preview} />
+              <div className="flex flex-col gap-2 p-4">
+                <div className="flex items-center gap-2">
+                  <Icon className="w-4 h-4 text-zinc-500 group-hover:text-zinc-300 transition-colors" />
+                  <span className="text-xs font-medium uppercase tracking-wider text-zinc-300">
+                    {template.name}
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-500 leading-relaxed">
+                  {template.description}
+                </p>
+                <div className="text-[10px] text-zinc-600">
+                  {template.widgetCount} widgets
+                </div>
               </div>
               {isApplying && (
                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/80">
@@ -164,7 +190,7 @@ export function DashboardGrid() {
     <div ref={containerRef} className="min-w-0 flex-1 w-full overflow-hidden">
       {widgets.length === 0 ? (
         <ScrollArea className="h-full w-full">
-          <div className="flex flex-col items-center pt-16 pb-20 gap-10">
+          <div className="flex flex-col items-center justify-center min-h-full py-16 gap-12">
             <div className="flex flex-col items-center gap-1.5 text-center">
               <div className="flex items-center justify-center w-10 h-10 bg-zinc-800 text-zinc-400 mb-2">
                 <LayoutGrid className="w-5 h-5" />
