@@ -2,12 +2,10 @@ import { streamText, stepCountIs, tool } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import { Bash } from "just-bash";
+import { createBashTool } from "bash-tool";
 import {
   writeWidgetFile,
   readWidgetFile,
-  listWidgetFiles,
-  deleteWidgetFile,
-  addWidgetDependencies,
   rebuildWidget,
 } from "@/lib/widget-runner";
 import {
@@ -18,7 +16,7 @@ import {
 
 const SYSTEM_PROMPT = `You are a coding agent that builds React widget components.
 
-The widget runs in a Vite + React environment inside a Docker container. You can create multiple files under \`src/\` and install additional npm packages.
+The widget runs in a Vite + React environment inside a Docker container.
 
 ## What You Are Building
 
@@ -43,7 +41,7 @@ src/
   types.ts                 ← shared types
 \`\`\`
 
-All paths passed to tools must start with \`src/\`.
+Use the \`writeFile\` tool to write files. Writing \`src/App.tsx\` triggers a container rebuild.
 
 ## Component Rules
 
@@ -82,10 +80,6 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 Utility: \`import { cn } from "@/lib/utils";\`
 
-## Adding Extra Dependencies
-
-If you need a package that is NOT listed above, call \`addDependencies\` BEFORE writing code that imports it. The packages will be installed when the container builds.
-
 ## Data Fetching
 
 For external APIs, use the CORS proxy provided by the host app:
@@ -108,26 +102,16 @@ Use \`useEffect\` with \`setInterval\` for polling. Always handle loading and er
 ## Workflow
 
 1. Briefly explain what you will build (1-2 sentences max).
-2. If extra packages are needed, call \`addDependencies\` first.
-3. Write helper files first (\`writeFile\` for components, hooks, utils).
-4. Write \`src/App.tsx\` LAST — this triggers the container build.
-5. Use \`listFiles\` and \`readFile\` to inspect existing code when iterating.
-6. If you spot issues, fix the affected files and write \`src/App.tsx\` again to rebuild.
+2. Write helper files first (\`writeFile\` for components, hooks, utils).
+3. Write \`src/App.tsx\` LAST — this triggers the container build.
+4. Use \`readFile\` to inspect existing code when iterating.
+5. If you spot issues, fix the affected files and write \`src/App.tsx\` again to rebuild.
 
 ## Dashboard Awareness
 
 You are building one widget within a larger dashboard. Use \`listDashboardWidgets\` to see what other widgets exist — their titles, descriptions, and whether they have code. Use \`readWidgetCode\` to inspect a sibling widget's source code when you need to match API patterns, data formats, or styling conventions.
 
 Design your widget to complement the others. Don't duplicate what they already show.
-
-## Bash Tool
-
-You have access to a sandboxed \`bash\` tool for running shell commands. The environment is in-memory with no access to the real filesystem. Use it for:
-- Processing or transforming data (jq, awk, sed, grep, sort, etc.)
-- Quick calculations or logic
-- Prototyping API responses before writing widget code
-
-JavaScript execution is enabled via \`js-exec\`.
 
 Keep the widget focused, clean, and production-quality.`;
 
@@ -145,75 +129,29 @@ export async function POST(request: Request) {
     return Response.json({ error: "widgetId required" }, { status: 400 });
   }
 
-  const writeFileTool = tool({
-    description:
-      "Write a file to the widget. Path must start with src/. Writing src/App.tsx triggers a container rebuild.",
-    inputSchema: z.object({
-      path: z
-        .string()
-        .describe("Relative file path starting with src/ (e.g. src/App.tsx, src/components/Chart.tsx)"),
-      content: z.string().describe("The complete file content"),
-    }),
-    execute: async ({ path, content }) => {
-      await writeWidgetFile(widgetId, path, content);
-      if (path === "src/App.tsx") {
-        rebuildWidget(widgetId).catch(console.error);
-      }
-      return { success: true, path };
+  const widgetSandbox = {
+    async executeCommand(command: string) {
+      const bash = new Bash({ javascript: true });
+      const result = await bash.exec(command);
+      return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
     },
-  });
-
-  const readFileTool = tool({
-    description: "Read a file from the widget source.",
-    inputSchema: z.object({
-      path: z
-        .string()
-        .describe("Relative file path starting with src/"),
-    }),
-    execute: async ({ path }) => {
+    async readFile(path: string) {
       const content = await readWidgetFile(widgetId, path);
-      if (content === null) return { error: "File not found", path };
-      return { content, path };
+      if (content === null) throw new Error(`File not found: ${path}`);
+      return content;
     },
-  });
+    async writeFiles(files: Array<{ path: string; content: string | Buffer }>) {
+      for (const f of files) {
+        const content = typeof f.content === "string" ? f.content : f.content.toString("utf-8");
+        await writeWidgetFile(widgetId, f.path, content);
+        if (f.path === "src/App.tsx") {
+          rebuildWidget(widgetId).catch(console.error);
+        }
+      }
+    },
+  };
 
-  const listFilesTool = tool({
-    description:
-      "List all files in the widget's src/ directory.",
-    inputSchema: z.object({}),
-    execute: async () => {
-      const files = await listWidgetFiles(widgetId);
-      return { files };
-    },
-  });
-
-  const deleteFileTool = tool({
-    description:
-      "Delete a file from the widget. Cannot delete src/App.tsx.",
-    inputSchema: z.object({
-      path: z
-        .string()
-        .describe("Relative file path starting with src/"),
-    }),
-    execute: async ({ path }) => {
-      await deleteWidgetFile(widgetId, path);
-      return { success: true, path };
-    },
-  });
-
-  const addDependenciesTool = tool({
-    description:
-      "Install additional npm packages for this widget. Call BEFORE writing code that imports them.",
-    inputSchema: z.object({
-      packages: z
-        .array(z.string())
-        .describe("Package names to install (e.g. [\"three\", \"@react-three/fiber\"])"),
-    }),
-    execute: async ({ packages }) => {
-      const all = await addWidgetDependencies(widgetId, packages);
-      return { installed: all };
-    },
-  });
+  const { tools: bashTools } = await createBashTool({ sandbox: widgetSandbox });
 
   const listDashboardWidgetsTool = tool({
     description:
@@ -260,24 +198,6 @@ export async function POST(request: Request) {
     },
   });
 
-  const bashEnv = new Bash({ javascript: true });
-
-  const bashTool = tool({
-    description:
-      "Run a shell command in a sandboxed bash environment. The environment has an in-memory filesystem, supports standard Unix commands (grep, sed, awk, jq, sort, etc.), and JavaScript via js-exec. Use for data processing, prototyping, and quick calculations.",
-    inputSchema: z.object({
-      command: z.string().describe("The bash command to execute"),
-    }),
-    execute: async ({ command }) => {
-      const result = await bashEnv.exec(command);
-      return {
-        stdout: result.stdout.slice(0, 30000),
-        stderr: result.stderr.slice(0, 10000),
-        exitCode: result.exitCode,
-      };
-    },
-  });
-
   const webSearchTool = anthropic.tools.webSearch_20250305({ maxUses: 5 });
 
   const result = streamText({
@@ -285,14 +205,9 @@ export async function POST(request: Request) {
     system: SYSTEM_PROMPT,
     messages,
     tools: {
-      writeFile: writeFileTool,
-      readFile: readFileTool,
-      listFiles: listFilesTool,
-      deleteFile: deleteFileTool,
-      addDependencies: addDependenciesTool,
+      ...bashTools,
       listDashboardWidgets: listDashboardWidgetsTool,
       readWidgetCode: readWidgetCodeTool,
-      bash: bashTool,
       web_search: webSearchTool,
     },
     stopWhen: stepCountIs(40),
@@ -344,23 +259,11 @@ export async function POST(request: Request) {
                   toolName: "readFile",
                   args: { path: input?.path },
                 });
-              } else if (part.toolName === "listFiles") {
+              } else if (part.toolName === "bash") {
                 send({
                   type: "tool-call",
-                  toolName: "listFiles",
-                  args: {},
-                });
-              } else if (part.toolName === "deleteFile") {
-                send({
-                  type: "tool-call",
-                  toolName: "deleteFile",
-                  args: { path: input?.path },
-                });
-              } else if (part.toolName === "addDependencies") {
-                send({
-                  type: "tool-call",
-                  toolName: "addDependencies",
-                  args: { packages: input?.packages },
+                  toolName: "bash",
+                  args: { command: input?.command },
                 });
               } else if (part.toolName === "listDashboardWidgets") {
                 send({
@@ -373,12 +276,6 @@ export async function POST(request: Request) {
                   type: "tool-call",
                   toolName: "readWidgetCode",
                   args: { targetWidgetId: input?.targetWidgetId, path: input?.path },
-                });
-              } else if (part.toolName === "bash") {
-                send({
-                  type: "tool-call",
-                  toolName: "bash",
-                  args: { command: input?.command },
                 });
               } else if (part.toolName === "web_search") {
                 send({
