@@ -4,7 +4,7 @@ An AI-powered dashboard builder. Describe the widget you want in plain English a
 
 Each widget is a full React app — with its own dependencies, API calls, charts, maps, and interactive UI — running in an isolated iframe. Drag, resize, and organize them into dashboards for any domain: cybersecurity, OSINT, trading, prediction markets, or anything you can describe.
 
-https://github.com/homanp/infinite-monitor/releases/download/v0.1.0/infinitemonitor.mp4
+<video src="https://github.com/homanp/infinite-monitor/releases/download/v0.1.0/infinitemonitor.mp4" controls autoplay muted loop width="100%"></video>
 
 ## How it works
 
