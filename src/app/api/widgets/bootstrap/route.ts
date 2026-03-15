@@ -1,5 +1,9 @@
 import { upsertWidget } from "@/db/widgets";
-import { writeWidgetFile, rebuildWidget } from "@/lib/widget-runner";
+import {
+  writeWidgetFile,
+  addWidgetDependencies,
+  rebuildWidget,
+} from "@/lib/widget-runner";
 
 export async function POST(request: Request) {
   const { widgets } = (await request.json()) as {
@@ -22,11 +26,16 @@ export async function POST(request: Request) {
     });
 
     for (const [path, content] of Object.entries(w.files)) {
+      if (path === "deps.json") {
+        try {
+          const packages: string[] = JSON.parse(content);
+          await addWidgetDependencies(w.id, packages);
+        } catch {}
+        continue;
+      }
       try {
         await writeWidgetFile(w.id, path, content);
-      } catch {
-        // skip files that fail validation (e.g. deps.json)
-      }
+      } catch {}
     }
 
     rebuildWidget(w.id).catch(console.error);
