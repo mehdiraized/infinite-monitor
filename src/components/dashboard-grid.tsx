@@ -7,7 +7,7 @@ import { WidgetCard } from "@/components/widget-card";
 import { deleteWidgetFromDb, scheduleSyncToServer } from "@/lib/sync-db";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CreateWidgetDialog } from "@/components/create-widget-dialog";
-import { InfiniteCanvas } from "@/components/infinite-canvas";
+import { CELL_W, CELL_H, MARGIN, InfiniteCanvas } from "@/components/infinite-canvas";
 import { DraggableWidget } from "@/components/draggable-widget";
 import { ZoomControls } from "@/components/zoom-controls";
 import type { CanvasLayout } from "@/store/widget-store";
@@ -32,13 +32,15 @@ const ICON_MAP: Record<string, typeof TrendingUp> = {
   shield: Shield,
 };
 
-function TemplateGallery() {
+function TemplateGallery({ containerRef }: { containerRef: React.RefObject<HTMLDivElement | null> }) {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [applying, setApplying] = useState<string | null>(null);
   const applyTemplate = useWidgetStore((s) => s.applyTemplate);
   const renameDashboard = useWidgetStore((s) => s.renameDashboard);
+  const setViewport = useWidgetStore((s) => s.setViewport);
   const activeDashboardId = useWidgetStore((s) => s.activeDashboardId);
+  const containerEl = containerRef.current;
 
   useEffect(() => {
     fetch("/api/templates")
@@ -54,6 +56,34 @@ function TemplateGallery() {
     if (activeDashboardId) {
       renameDashboard(activeDashboardId, template.name);
     }
+
+    // Fit-to-view after applying template
+    if (activeDashboardId && containerEl) {
+      const stepX = CELL_W + MARGIN;
+      const stepY = CELL_H + MARGIN;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const w of template.widgets) {
+        const layout = w.layoutJson ? JSON.parse(w.layoutJson) : { x: 0, y: 0, w: 4, h: 3 };
+        const px = layout.x * stepX;
+        const py = layout.y * stepY;
+        const pw = layout.w * stepX - MARGIN;
+        const ph = layout.h * stepY - MARGIN;
+        minX = Math.min(minX, px);
+        minY = Math.min(minY, py);
+        maxX = Math.max(maxX, px + pw);
+        maxY = Math.max(maxY, py + ph);
+      }
+      const contentW = maxX - minX;
+      const contentH = maxY - minY;
+      const padding = 60;
+      const cw = containerEl.clientWidth;
+      const ch = containerEl.clientHeight;
+      const fitZoom = Math.min(1, Math.min((cw - padding * 2) / contentW, (ch - padding * 2) / contentH));
+      const fitPanX = (cw - contentW * fitZoom) / 2 - minX * fitZoom;
+      const fitPanY = (ch - contentH * fitZoom) / 2 - minY * fitZoom;
+      setViewport(activeDashboardId, { panX: fitPanX, panY: fitPanY, zoom: fitZoom });
+    }
+
     scheduleSyncToServer();
     setApplying(null);
   };
@@ -210,7 +240,7 @@ export function DashboardGrid() {
                 <CreateWidgetDialog />
               </div>
             </div>
-            <TemplateGallery />
+            <TemplateGallery containerRef={containerRef} />
           </div>
         </ScrollArea>
       ) : (
