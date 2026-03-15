@@ -1,6 +1,7 @@
 import { streamText, stepCountIs, tool } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
+import { createModel, isAnthropicModel } from "@/lib/create-model";
 import { Bash } from "just-bash";
 import { createBashTool } from "bash-tool";
 import {
@@ -117,17 +118,22 @@ Keep the widget focused, clean, and production-quality.`;
 
 export async function POST(request: Request) {
   const body = await request.json();
-  const { messages, widgetId } = body as {
+  const { messages, widgetId, model: modelStr, apiKey } = body as {
     messages: Array<{
       role: "user" | "assistant";
       content: string | Array<Record<string, unknown>>;
     }>;
     widgetId: string;
+    model?: string;
+    apiKey?: string;
   };
 
   if (!widgetId) {
     return Response.json({ error: "widgetId required" }, { status: 400 });
   }
+
+  const selectedModel = modelStr ?? "anthropic:claude-sonnet-4-6";
+  const useAnthropic = isAnthropicModel(selectedModel);
 
   const SANDBOX_ROOT = "/widget";
 
@@ -209,27 +215,35 @@ export async function POST(request: Request) {
     },
   });
 
-  const webSearchTool = anthropic.tools.webSearch_20250305({ maxUses: 5 });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tools: Record<string, any> = {
+    ...bashTools,
+    listDashboardWidgets: listDashboardWidgetsTool,
+    readWidgetCode: readWidgetCodeTool,
+  };
+
+  if (useAnthropic) {
+    tools.web_search = anthropic.tools.webSearch_20250305({ maxUses: 5 });
+  }
 
   const result = streamText({
-    model: anthropic("claude-opus-4-6"),
+    model: createModel(selectedModel, apiKey),
     system: SYSTEM_PROMPT,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     messages: messages as any,
-    tools: {
-      ...bashTools,
-      listDashboardWidgets: listDashboardWidgetsTool,
-      readWidgetCode: readWidgetCodeTool,
-      web_search: webSearchTool,
-    },
+    tools,
     stopWhen: stepCountIs(40),
     abortSignal: request.signal,
-    providerOptions: {
-      anthropic: {
-        thinking: { type: "adaptive" },
-        effort: "high",
-      },
-    },
+    ...(useAnthropic
+      ? {
+          providerOptions: {
+            anthropic: {
+              thinking: { type: "adaptive" },
+              effort: "high",
+            },
+          },
+        }
+      : {}),
   });
 
   const encoder = new TextEncoder();
