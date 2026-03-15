@@ -27,9 +27,23 @@ import {
   PromptInputTextarea,
   PromptInputFileUpload,
 } from "@/components/ai-elements/prompt-input";
+import {
+  ModelSelector,
+  ModelSelectorTrigger,
+  ModelSelectorContent,
+  ModelSelectorInput,
+  ModelSelectorList,
+  ModelSelectorEmpty,
+  ModelSelectorGroup,
+  ModelSelectorItem,
+  ModelSelectorLogo,
+  ModelSelectorName,
+} from "@/components/ai-elements/model-selector";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWidgetStore, type WidgetMessage, type MessageAttachment } from "@/store/widget-store";
+import { useSettingsStore } from "@/store/settings-store";
+import { PROVIDERS, parseModelString, findProvider } from "@/lib/model-registry";
 
 interface PendingFile {
   id: string;
@@ -193,7 +207,9 @@ function updateAssistantMessage(
 
 async function streamToWidget(
   widgetId: string,
-  messages: Array<{ role: "user" | "assistant"; content: string | Record<string, unknown>[] }>
+  messages: Array<{ role: "user" | "assistant"; content: string | Record<string, unknown>[] }>,
+  model?: string,
+  apiKey?: string,
 ) {
   const {
     addMessage,
@@ -228,7 +244,7 @@ async function streamToWidget(
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, widgetId }),
+      body: JSON.stringify({ messages, widgetId, model, apiKey }),
       signal: controller.signal,
     });
 
@@ -336,7 +352,94 @@ async function streamToWidget(
   }
 }
 
+function useModelSelector() {
+  const selectedModel = useSettingsStore((s) => s.selectedModel);
+  const setModel = useSettingsStore((s) => s.setModel);
+  const apiKeys = useSettingsStore((s) => s.apiKeys);
+  const setApiKey = useSettingsStore((s) => s.setApiKey);
+  const [open, setOpen] = useState(false);
+  const [keyInput, setKeyInput] = useState("");
+  const [showKeyInput, setShowKeyInput] = useState(false);
+
+  const { providerId, modelId } = parseModelString(selectedModel);
+  const provider = findProvider(providerId);
+  const model = provider?.models.find((m) => m.id === modelId);
+  const hasKey = !!apiKeys[providerId];
+
+  const handleSelect = (newModel: string) => {
+    setModel(newModel);
+    setOpen(false);
+    const { providerId: pid } = parseModelString(newModel);
+    if (!apiKeys[pid]) {
+      setShowKeyInput(true);
+    } else {
+      setShowKeyInput(false);
+    }
+  };
+
+  const handleSaveKey = () => {
+    if (keyInput.trim()) {
+      setApiKey(providerId, keyInput.trim());
+      setKeyInput("");
+      setShowKeyInput(false);
+    }
+  };
+
+  const trigger = (
+    <ModelSelector open={open} onOpenChange={setOpen}>
+      <ModelSelectorTrigger className="inline-flex h-7 items-center gap-1.5 px-2 text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors cursor-pointer">
+        <ModelSelectorLogo provider={providerId as "anthropic"} className="size-3.5" />
+        <span>{model?.name ?? modelId}</span>
+        {!hasKey && <span className="size-1.5 rounded-full bg-yellow-500/70 shrink-0" />}
+      </ModelSelectorTrigger>
+      <ModelSelectorContent>
+        <ModelSelectorInput placeholder="Search models..." />
+        <ModelSelectorList>
+          <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
+          {PROVIDERS.map((p) => (
+            <ModelSelectorGroup key={p.id} heading={p.name}>
+              {p.models.map((m) => (
+                <ModelSelectorItem
+                  key={`${p.id}:${m.id}`}
+                  value={`${p.id}:${m.id} ${m.name} ${p.name}`}
+                  onSelect={() => handleSelect(`${p.id}:${m.id}`)}
+                  className="flex items-center gap-2"
+                >
+                  <ModelSelectorLogo provider={p.id as "anthropic"} />
+                  <ModelSelectorName>{m.name}</ModelSelectorName>
+                </ModelSelectorItem>
+              ))}
+            </ModelSelectorGroup>
+          ))}
+        </ModelSelectorList>
+      </ModelSelectorContent>
+    </ModelSelector>
+  );
+
+  const keyInputEl = (showKeyInput || !hasKey) ? (
+    <div className="flex items-center gap-1.5">
+      <input
+        type="password"
+        value={keyInput}
+        onChange={(e) => setKeyInput(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && handleSaveKey()}
+        placeholder={`${provider?.name ?? providerId} API key...`}
+        className="flex-1 bg-zinc-900 border border-zinc-800 text-xs px-2.5 py-1.5 text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
+      />
+      <button
+        onClick={handleSaveKey}
+        className="px-2.5 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
+      >
+        Save
+      </button>
+    </div>
+  ) : null;
+
+  return { trigger, keyInputEl };
+}
+
 export function ChatSidebar() {
+  const { trigger: modelTrigger, keyInputEl: modelKeyInput } = useModelSelector();
   const widgets = useWidgetStore((s) => s.widgets);
   const activeWidgetId = useWidgetStore((s) => s.activeWidgetId);
   const streamingWidgetIds = useWidgetStore((s) => s.streamingWidgetIds);
@@ -534,11 +637,15 @@ export function ChatSidebar() {
       attachments,
     });
 
+    const { selectedModel, apiKeys } = useSettingsStore.getState();
+    const { providerId } = parseModelString(selectedModel);
+    const byokKey = apiKeys[providerId];
+
     if (isFirstUserMessage && userContent) {
       fetch("/api/generate-title", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userContent }),
+        body: JSON.stringify({ message: userContent, model: selectedModel, apiKey: byokKey }),
       })
         .then((res) => res.ok ? res.json() : null)
         .then((data) => {
@@ -547,7 +654,7 @@ export function ChatSidebar() {
         .catch(() => {});
     }
 
-    streamToWidget(widgetId, messagesForApi);
+    streamToWidget(widgetId, messagesForApi, selectedModel, byokKey);
   }
 
   return (
@@ -620,7 +727,8 @@ export function ChatSidebar() {
           <ConversationScrollButton />
         </Conversation>
 
-        <div className="px-5 py-3">
+        <div className="px-5 py-3 space-y-2">
+          {modelKeyInput}
           <PromptInput onSubmit={handleSubmit}>
             {pendingFiles.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
@@ -656,16 +764,15 @@ export function ChatSidebar() {
               disabled={isActiveStreaming}
             />
             <div className="flex items-center justify-between">
-              <span className="text-[9px] text-zinc-600">
-                {isActiveStreaming ? (
-                  <span className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
+                {modelTrigger}
+                {isActiveStreaming && (
+                  <span className="flex items-center gap-2 text-[9px]">
                     <KittLoader />
                     <span className="text-zinc-400">esc to interrupt</span>
                   </span>
-                ) : (
-                  "Enter to send · Shift+Enter for newline"
                 )}
-              </span>
+              </div>
               <div className="flex items-center gap-1">
                 <PromptInputFileUpload
                   onFiles={handleFiles}
