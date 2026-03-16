@@ -9,6 +9,7 @@ services:
       - app-data:/app/data
     environment:
       - DATABASE_PATH=/app/data/widgets.db
+      - HOSTNAME=0.0.0.0
     depends_on:
       widget-base:
         condition: service_completed_successfully
