@@ -19,17 +19,6 @@ Each widget is a full React app — with its own dependencies, API calls, charts
 3. The widget renders live in an iframe on your dashboard
 4. Iterate by chatting — the agent rewrites and rebuilds in seconds
 
-The agent has 6 tools at its disposal:
-
-| Tool | What it does |
-|------|-------------|
-| `bash` | Run shell commands in a sandboxed environment (via [bash-tool](https://github.com/vercel-labs/bash-tool)) |
-| `writeFile` | Write source files to the widget — writing `src/App.tsx` triggers a build |
-| `readFile` | Read existing widget source files |
-| `listDashboardWidgets` | See sibling widgets on the same dashboard |
-| `readWidgetCode` | Read another widget's source code to match patterns |
-| `web_search` | Search the web for APIs, docs, and data |
-
 ## Quick start
 
 ### Prerequisites
@@ -70,21 +59,7 @@ make setup   # npm install + build widget-base Docker image
 make dev     # start Next.js dev server
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
-
-### Available make targets
-
-| Command | Description |
-|---------|-------------|
-| `make setup` | Install npm deps + build Docker image (first-time) |
-| `make docker` | Rebuild the widget runtime Docker image |
-| `make dev` | Start the Next.js dev server |
-| `make build` | Production build |
-| `make start` | Start production server |
-| `make test` | Run tests |
-| `make lint` | Run linter |
-| `make clean` | Remove build artifacts, Docker container, and volume |
-| `make all` | Full bootstrap: setup + dev |
+Open [http://localhost:3000](http://localhost:3000). Run `make help` to see all available targets.
 
 ## Architecture
 
@@ -131,84 +106,21 @@ Open [http://localhost:3000](http://localhost:3000).
 
 **Dashboard-aware agents** — Each widget's AI agent can see what other widgets exist on the same dashboard and read their source code, so it builds complementary components instead of duplicating work.
 
-**Infinite canvas** — Pan, zoom, and place widgets anywhere on an unbounded grid. Drag widgets by their title bar, resize from the corner handle. Widgets snap to grid cells. A minimap shows your position across the canvas.
-
-**Sandboxed bash** — The agent has a `just-bash` sandboxed shell for data processing, prototyping, and quick calculations without touching your system.
+**Infinite canvas** — Pan, zoom, and place widgets anywhere on an unbounded grid. Drag widgets by their title bar, resize from the corner handle. Widgets snap to grid cells.
 
 **Live web search** — The agent searches the web for API documentation, data sources, and implementation patterns while building.
 
-**CORS proxy** — Widgets can fetch any external API through the built-in proxy at `/api/proxy?url=...`.
-
 **Dashboard templates** — Start from pre-built templates for common domains or build from scratch.
-
-**Persistent builds** — Widget builds are stored on a Docker volume. Container restarts don't lose your built widgets.
-
-**Stale build recovery** — If a build gets stuck for over 2 minutes, the system automatically retries instead of requiring a server restart.
 
 ## Supported providers
 
 Supports 15 AI providers including Anthropic, OpenAI, Google, xAI, Mistral, DeepSeek, Groq, and more. Enter your API key in the chat sidebar or set it via environment variables. See [`.env.example`](.env.example) for the full list.
 
-## Tech stack
-
-| Layer | Technology |
-|-------|-----------|
-| Framework | Next.js 16, React 19, TypeScript |
-| AI | Vercel AI SDK, 15 providers via BYOK |
-| Styling | Tailwind CSS 4, shadcn/ui, Geist Mono |
-| State | Zustand (persisted to localStorage) |
-| Database | SQLite via Drizzle ORM |
-| Container | Docker (Vite + serve) |
-| Canvas | Custom infinite canvas (pan/zoom/minimap/grid-snap) |
-| Charts | Recharts (in widgets) |
-| Maps | MapLibre GL (in widgets) |
-
-## Project structure
-
-```
-src/
-├── app/
-│   ├── api/
-│   │   ├── chat/          # AI agent endpoint (streaming)
-│   │   ├── proxy/         # CORS proxy for widget API calls
-│   │   ├── sync/          # Client ↔ server state sync
-│   │   ├── widget/[id]/   # Widget iframe proxy
-│   │   └── widgets/       # Widget CRUD
-│   └── page.tsx           # Dashboard page
-├── components/
-│   ├── ai-elements/       # Chat UI (messages, reasoning, code blocks)
-│   ├── chat-sidebar.tsx   # AI chat panel + model selector
-│   ├── dashboard-grid.tsx # Dashboard orchestrator
-│   ├── infinite-canvas.tsx # Pan/zoom infinite canvas
-│   ├── draggable-widget.tsx # Grid-snapped drag & resize
-│   ├── zoom-controls.tsx  # Zoom buttons + minimap
-│   ├── widget-card.tsx    # Widget iframe container
-│   └── dashboard-picker.tsx
-├── db/                    # SQLite schema + queries
-├── lib/
-│   ├── model-registry.ts  # Provider + model definitions
-│   ├── create-model.ts    # AI SDK model factory
-│   ├── widget-runner.ts   # Docker build orchestration
-│   └── sync-db.ts         # Client sync utilities
-└── store/
-    ├── widget-store.ts    # Zustand widget/canvas state
-    └── settings-store.ts  # API keys + model preferences
-docker/
-└── widget-base/           # Widget runtime Docker image
-    ├── Dockerfile
-    └── template/          # Vite + React + Tailwind base
-```
-
 ## Security
 
-**Local-first storage** — All API keys (AI providers and search providers) are stored in your browser's localStorage. They are sent to the Next.js server only for the duration of a request and are never persisted server-side or sent to any third party.
+**Local-first storage** — All API keys are stored in your browser's localStorage. They are sent to the server only for the duration of a request and are never persisted server-side.
 
-**Brin threat scanning** — Every external URL touched by the platform is scanned through [Brin](https://brin.sh) ([GitHub](https://github.com/superagent-ai/brin)), an open security API that scores domains and pages for threats. Brin runs in two places:
-
-- **Web search tool** — When the AI agent searches the web, all result URLs are scanned before they are returned to the model. Results with a score below 30 are filtered out.
-- **CORS proxy** — When widgets fetch external APIs through `/api/proxy`, the target URL is scanned before the request is forwarded. Requests to domains or pages scoring below 30 are blocked with a `403`.
-
-Both layers use `tolerance=lenient` and automatically route to Brin's `/domain/` endpoint for apex URLs or `/page/` endpoint for URLs with a path. Scan results are cached in-memory for 5 minutes to avoid redundant lookups.
+**Brin threat scanning** — Every external URL is scanned through [Brin](https://brin.sh) ([GitHub](https://github.com/superagent-ai/brin)) for threats. Web search results and CORS proxy requests with a threat score below 30 are blocked.
 
 ## Contributing
 
@@ -216,7 +128,6 @@ Contributions are welcome. Some areas that need work:
 
 - **Templates** — More pre-built dashboard templates for different domains
 - **Widget marketplace** — Share and import widgets between users
-- **Deployment** — Publish widgets to Vercel/Cloudflare for permanent hosting
 - **Collaboration** — Real-time multi-user dashboard editing
 - **Mobile** — Responsive layout and touch gesture support
 
