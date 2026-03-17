@@ -3,8 +3,7 @@
 import { useEffect, useState } from "react";
 import { DashboardGrid } from "@/components/dashboard-grid";
 import { ChatSidebar } from "@/components/chat-sidebar";
-import { CreateWidgetDialog } from "@/components/create-widget-dialog";
-import { AddTextBlockButton } from "@/components/add-text-block-button";
+import { AddMenu } from "@/components/add-menu";
 import { DashboardPicker } from "@/components/dashboard-picker";
 import { ScrambleText } from "@/components/scramble-text";
 import { Star } from "lucide-react";
@@ -56,8 +55,7 @@ export default function Home() {
               )}
             </a>
             <DashboardPicker />
-            <AddTextBlockButton />
-            <CreateWidgetDialog />
+            <AddMenu />
           </div>
         </header>
         <DashboardGrid />

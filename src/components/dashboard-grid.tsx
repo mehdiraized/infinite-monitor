@@ -7,7 +7,7 @@ import { WidgetCard } from "@/components/widget-card";
 import { TextBlockItem } from "@/components/text-block-item";
 import { deleteWidgetFromDb, deleteTextBlockFromDb, scheduleSyncToServer } from "@/lib/sync-db";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { CreateWidgetDialog } from "@/components/create-widget-dialog";
+import { AddMenu } from "@/components/add-menu";
 import { CELL_W, CELL_H, MARGIN, InfiniteCanvas } from "@/components/infinite-canvas";
 import { DraggableWidget } from "@/components/draggable-widget";
 import { ZoomControls } from "@/components/zoom-controls";
@@ -279,7 +279,7 @@ export function DashboardGrid() {
                 Get started by adding your first widget or pick a template below.
               </p>
               <div className="mt-3">
-                <CreateWidgetDialog />
+                <AddMenu />
               </div>
             </div>
             <TemplateGallery containerRef={containerRef} />
