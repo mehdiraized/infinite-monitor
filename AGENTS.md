@@ -28,7 +28,7 @@ See `Makefile` for shorthand targets (`make setup`, `make dev`, `make lint`, `ma
 ### Non-obvious notes
 
 - **Docker is required at runtime**, not just for deployment. The Next.js API routes use `dockerode` to create/manage widget containers. If Docker is not running, widget creation will fail.
-- **AI provider API keys** are entered via the UI (BYOK) or set in `.env.local`. The app works without any server-side keys — users paste keys in the chat sidebar. See `.env.example` for the full list of supported providers.
+- **AI provider API keys** are entered via the UI (BYOK) or set in `.env.local`. The app works without any server-side keys — users paste keys in the chat sidebar. See `.env.example` for the full list of supported providers. If you add/change `.env.local` while the dev server is running, you must restart the dev server for the new keys to take effect.
 - **SQLite database** is auto-created at `./data/widgets.db` (or `DATABASE_PATH` env var). No migrations command is needed; the schema is applied automatically.
 - **Husky pre-commit hook** runs `lint-staged` which executes ESLint and TypeScript type-checking on staged `src/**/*.{ts,tsx}` files.
 - The Docker daemon in the Cloud Agent VM requires `sudo dockerd` to start and `sudo chmod 666 /var/run/docker.sock` for non-root access. The storage driver must be `fuse-overlayfs` and iptables must use legacy mode (see Docker-in-Docker setup for Firecracker VMs).
