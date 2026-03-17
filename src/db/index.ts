@@ -50,6 +50,25 @@ if (!tableNames.has("widgets")) {
   }
 }
 
+if (!tableNames.has("text_blocks")) {
+  sqlite.exec(`CREATE TABLE text_blocks (
+    id TEXT PRIMARY KEY,
+    text TEXT NOT NULL DEFAULT '',
+    font_size INTEGER NOT NULL DEFAULT 24,
+    layout_json TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`);
+}
+
+{
+  const dashCols = sqlite.prepare("PRAGMA table_info(dashboards)").all() as { name: string }[];
+  const dashColNames = new Set(dashCols.map((c) => c.name));
+  if (!dashColNames.has("text_block_ids_json")) {
+    sqlite.exec("ALTER TABLE dashboards ADD COLUMN text_block_ids_json TEXT");
+  }
+}
+
 export const db = drizzle(sqlite, { schema });
 
 export { schema };

@@ -4,7 +4,8 @@ import { useMemo, useCallback, useState, useEffect, useRef } from "react";
 import { LayoutGrid, TrendingUp, Shield, Globe } from "lucide-react";
 import { useWidgetStore } from "@/store/widget-store";
 import { WidgetCard } from "@/components/widget-card";
-import { deleteWidgetFromDb, scheduleSyncToServer } from "@/lib/sync-db";
+import { TextBlockItem } from "@/components/text-block-item";
+import { deleteWidgetFromDb, deleteTextBlockFromDb, scheduleSyncToServer } from "@/lib/sync-db";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CreateWidgetDialog } from "@/components/create-widget-dialog";
 import { CELL_W, CELL_H, MARGIN, InfiniteCanvas } from "@/components/infinite-canvas";
@@ -154,10 +155,14 @@ export function DashboardGrid() {
   }, []);
 
   const allWidgets = useWidgetStore((s) => s.widgets);
+  const allTextBlocks = useWidgetStore((s) => s.textBlocks);
   const dashboards = useWidgetStore((s) => s.dashboards);
   const activeDashboardId = useWidgetStore((s) => s.activeDashboardId);
   const updateWidgetLayout = useWidgetStore((s) => s.updateWidgetLayout);
   const removeWidget = useWidgetStore((s) => s.removeWidget);
+  const updateTextBlock = useWidgetStore((s) => s.updateTextBlock);
+  const updateTextBlockLayout = useWidgetStore((s) => s.updateTextBlockLayout);
+  const removeTextBlock = useWidgetStore((s) => s.removeTextBlock);
   const viewports = useWidgetStore((s) => s.viewports);
   const setViewport = useWidgetStore((s) => s.setViewport);
 
@@ -186,6 +191,11 @@ export function DashboardGrid() {
     if (!activeDashboard) return allWidgets;
     return allWidgets.filter((w) => activeDashboard.widgetIds.includes(w.id));
   }, [allWidgets, activeDashboard]);
+
+  const textBlocks = useMemo(() => {
+    if (!activeDashboard) return allTextBlocks;
+    return allTextBlocks.filter((tb) => (activeDashboard.textBlockIds ?? []).includes(tb.id));
+  }, [allTextBlocks, activeDashboard]);
 
   const DEFAULT_VIEWPORT = { panX: 24, panY: 60, zoom: 1 };
 
@@ -217,13 +227,45 @@ export function DashboardGrid() {
     [updateWidgetLayout]
   );
 
+  const handleTextBlockTextChange = useCallback(
+    (id: string, text: string) => {
+      updateTextBlock(id, { text });
+      scheduleSyncToServer();
+    },
+    [updateTextBlock]
+  );
+
+  const handleTextBlockFontSizeChange = useCallback(
+    (id: string, fontSize: number) => {
+      updateTextBlock(id, { fontSize });
+      scheduleSyncToServer();
+    },
+    [updateTextBlock]
+  );
+
+  const handleTextBlockLayoutChange = useCallback(
+    (id: string, layout: CanvasLayout) => {
+      updateTextBlockLayout(id, layout);
+      scheduleSyncToServer();
+    },
+    [updateTextBlockLayout]
+  );
+
+  const handleRemoveTextBlock = useCallback(
+    (id: string) => {
+      removeTextBlock(id);
+      deleteTextBlockFromDb(id);
+    },
+    [removeTextBlock]
+  );
+
   if (!hydrated) {
     return <div ref={containerRef} className="min-w-0 flex-1 w-full overflow-hidden" />;
   }
 
   return (
     <div ref={containerRef} className="min-w-0 flex-1 w-full overflow-hidden relative">
-      {widgets.length === 0 ? (
+      {widgets.length === 0 && textBlocks.length === 0 ? (
         <ScrollArea className="h-full w-full">
           <div className="flex flex-col items-center justify-center min-h-full py-16 gap-12">
             <div className="flex flex-col items-center gap-1.5 text-center">
@@ -264,6 +306,20 @@ export function DashboardGrid() {
                 <WidgetCard widget={widget} onRemove={handleRemove} />
               </DraggableWidget>
             ))}
+            {textBlocks.map((tb) => (
+              <TextBlockItem
+                key={tb.id}
+                id={tb.id}
+                text={tb.text}
+                fontSize={tb.fontSize}
+                layout={tb.layout}
+                zoom={viewport.zoom}
+                onTextChange={(text) => handleTextBlockTextChange(tb.id, text)}
+                onFontSizeChange={(fs) => handleTextBlockFontSizeChange(tb.id, fs)}
+                onLayoutChange={(layout) => handleTextBlockLayoutChange(tb.id, layout)}
+                onRemove={() => handleRemoveTextBlock(tb.id)}
+              />
+            ))}
           </InfiniteCanvas>
           <ZoomControls
             zoom={viewport.zoom}
@@ -272,6 +328,7 @@ export function DashboardGrid() {
             containerWidth={containerSize.width}
             containerHeight={containerSize.height}
             widgets={widgets}
+            textBlocks={textBlocks}
             onViewportChange={handleViewportChange}
           />
         </>

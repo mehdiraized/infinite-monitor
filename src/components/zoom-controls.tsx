@@ -15,6 +15,7 @@ interface ZoomControlsProps {
   containerWidth: number;
   containerHeight: number;
   widgets: Array<{ layout: CanvasLayout }>;
+  textBlocks?: Array<{ layout: CanvasLayout }>;
   onViewportChange: (panX: number, panY: number, zoom: number) => void;
 }
 
@@ -48,8 +49,13 @@ export function ZoomControls({
   containerWidth,
   containerHeight,
   widgets,
+  textBlocks = [],
   onViewportChange,
 }: ZoomControlsProps) {
+  const allCanvasItems = useMemo(
+    () => [...widgets, ...textBlocks],
+    [widgets, textBlocks]
+  );
   const zoomIn = () => {
     const newZoom = Math.min(3, zoom + ZOOM_STEP);
     const cx = containerWidth / 2;
@@ -73,12 +79,12 @@ export function ZoomControls({
   };
 
   const fitToView = () => {
-    if (widgets.length === 0) {
+    if (allCanvasItems.length === 0) {
       resetView();
       return;
     }
 
-    const { minX, minY, maxX, maxY } = getWorldBounds(widgets);
+    const { minX, minY, maxX, maxY } = getWorldBounds(allCanvasItems);
     const contentW = maxX - minX;
     const contentH = maxY - minY;
     const padding = 60;
@@ -100,7 +106,7 @@ export function ZoomControls({
         zoom={zoom}
         containerWidth={containerWidth}
         containerHeight={containerHeight}
-        widgets={widgets}
+        widgets={allCanvasItems}
         onViewportChange={onViewportChange}
       />
       <div className="flex items-center justify-between gap-1 bg-zinc-800 border border-zinc-700 px-1 py-1">

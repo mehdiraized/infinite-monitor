@@ -40,10 +40,18 @@ export interface Widget {
   iframeVersion: number;
 }
 
+export interface TextBlock {
+  id: string;
+  text: string;
+  fontSize: number;
+  layout: CanvasLayout;
+}
+
 export interface Dashboard {
   id: string;
   title: string;
   widgetIds: string[];
+  textBlockIds: string[];
   createdAt: number;
 }
 
@@ -51,6 +59,7 @@ interface WidgetStore {
   dashboards: Dashboard[];
   activeDashboardId: string | null;
   widgets: Widget[];
+  textBlocks: TextBlock[];
   activeWidgetId: string | null;
   streamingWidgetIds: string[];
   currentActions: Record<string, string>;
@@ -87,6 +96,11 @@ interface WidgetStore {
       layoutJson: string | null;
     }>;
   }) => void;
+
+  addTextBlock: (position?: { x: number; y: number }) => string;
+  updateTextBlock: (id: string, updates: Partial<Pick<TextBlock, "text" | "fontSize">>) => void;
+  updateTextBlockLayout: (id: string, layout: Partial<CanvasLayout>) => void;
+  removeTextBlock: (id: string) => void;
 }
 
 let counter = 0;
@@ -131,6 +145,7 @@ export const useWidgetStore = create<WidgetStore>()(
       dashboards: [],
       activeDashboardId: null,
       widgets: [],
+      textBlocks: [],
       activeWidgetId: null,
       streamingWidgetIds: [],
       currentActions: {},
@@ -140,7 +155,7 @@ export const useWidgetStore = create<WidgetStore>()(
       addDashboard: (title = "Dashboard") => {
         const id = generateId("dash");
         set((state) => ({
-          dashboards: [...state.dashboards, { id, title, widgetIds: [], createdAt: Date.now() }],
+          dashboards: [...state.dashboards, { id, title, widgetIds: [], textBlockIds: [], createdAt: Date.now() }],
           activeDashboardId: id,
         }));
         return id;
@@ -157,12 +172,14 @@ export const useWidgetStore = create<WidgetStore>()(
       removeDashboard: (id) => {
         const dashboard = get().dashboards.find((d) => d.id === id);
         const widgetIds = dashboard?.widgetIds ?? [];
+        const textBlockIds = dashboard?.textBlockIds ?? [];
         set((state) => {
           const nextActions = { ...state.currentActions };
           for (const wid of widgetIds) delete nextActions[wid];
           return {
             dashboards: state.dashboards.filter((d) => d.id !== id),
             widgets: state.widgets.filter((w) => !widgetIds.includes(w.id)),
+            textBlocks: state.textBlocks.filter((tb) => !textBlockIds.includes(tb.id)),
             activeDashboardId: state.activeDashboardId === id ? null : state.activeDashboardId,
             activeWidgetId: widgetIds.includes(state.activeWidgetId ?? "") ? null : state.activeWidgetId,
             streamingWidgetIds: state.streamingWidgetIds.filter((wid) => !widgetIds.includes(wid)),
@@ -180,11 +197,10 @@ export const useWidgetStore = create<WidgetStore>()(
         const { widgets, dashboards, activeDashboardId } = get();
         let dashId = activeDashboardId;
 
-        // Auto-create a default dashboard if none exists
         if (!dashId || !dashboards.find((d) => d.id === dashId)) {
           dashId = generateId("dash");
           set((state) => ({
-            dashboards: [...state.dashboards, { id: dashId!, title: "Dashboard", widgetIds: [], createdAt: Date.now() }],
+            dashboards: [...state.dashboards, { id: dashId!, title: "Dashboard", widgetIds: [], textBlockIds: [], createdAt: Date.now() }],
             activeDashboardId: dashId,
           }));
         }
@@ -374,7 +390,7 @@ export const useWidgetStore = create<WidgetStore>()(
         if (!dashId || !dashboards.find((d) => d.id === dashId)) {
           dashId = generateId("dash");
           set((state) => ({
-            dashboards: [...state.dashboards, { id: dashId!, title: "Dashboard", widgetIds: [], createdAt: Date.now() }],
+            dashboards: [...state.dashboards, { id: dashId!, title: "Dashboard", widgetIds: [], textBlockIds: [], createdAt: Date.now() }],
             activeDashboardId: dashId,
           }));
         }
@@ -421,6 +437,64 @@ export const useWidgetStore = create<WidgetStore>()(
           }),
         }).catch(console.error);
       },
+
+      addTextBlock: (position) => {
+        const { dashboards, activeDashboardId, widgets } = get();
+        let dashId = activeDashboardId;
+
+        if (!dashId || !dashboards.find((d) => d.id === dashId)) {
+          dashId = generateId("dash");
+          set((state) => ({
+            dashboards: [...state.dashboards, { id: dashId!, title: "Dashboard", widgetIds: [], textBlockIds: [], createdAt: Date.now() }],
+            activeDashboardId: dashId,
+          }));
+        }
+
+        const dashboard = get().dashboards.find((d) => d.id === dashId);
+        const pos = position ?? getNextPosition(widgets, dashboard?.widgetIds ?? []);
+        const id = generateId("text");
+
+        const block: TextBlock = {
+          id,
+          text: "",
+          fontSize: 24,
+          layout: { x: pos.x, y: pos.y, w: 3, h: 1 },
+        };
+
+        set((state) => ({
+          textBlocks: [...state.textBlocks, block],
+          dashboards: state.dashboards.map((d) =>
+            d.id === dashId ? { ...d, textBlockIds: [...(d.textBlockIds ?? []), id] } : d
+          ),
+        }));
+        return id;
+      },
+
+      updateTextBlock: (id, updates) => {
+        set((state) => ({
+          textBlocks: state.textBlocks.map((tb) =>
+            tb.id === id ? { ...tb, ...updates } : tb
+          ),
+        }));
+      },
+
+      updateTextBlockLayout: (id, layout) => {
+        set((state) => ({
+          textBlocks: state.textBlocks.map((tb) =>
+            tb.id === id ? { ...tb, layout: { ...tb.layout, ...layout } } : tb
+          ),
+        }));
+      },
+
+      removeTextBlock: (id) => {
+        set((state) => ({
+          textBlocks: state.textBlocks.filter((tb) => tb.id !== id),
+          dashboards: state.dashboards.map((d) => ({
+            ...d,
+            textBlockIds: (d.textBlockIds ?? []).filter((tbId) => tbId !== id),
+          })),
+        }));
+      },
     }),
     {
       name: "infinite-monitor-widgets",
@@ -450,12 +524,27 @@ export const useWidgetStore = create<WidgetStore>()(
           };
         });
 
-        let dashboards = stored.dashboards ?? [];
+        const textBlocks = (stored.textBlocks ?? []).map((tb) => ({
+          ...tb,
+          fontSize: tb.fontSize ?? 24,
+          layout: {
+            x: tb.layout?.x ?? 0,
+            y: tb.layout?.y ?? 0,
+            w: tb.layout?.w ?? 3,
+            h: tb.layout?.h ?? 1,
+          },
+        }));
+
+        let dashboards = (stored.dashboards ?? []).map((d) => ({
+          ...d,
+          textBlockIds: (d as Dashboard).textBlockIds ?? [],
+        }));
         if (dashboards.length === 0 && widgets.length > 0) {
           dashboards = [{
             id: generateId("dash"),
             title: "Dashboard",
             widgetIds: widgets.map((w) => w.id),
+            textBlockIds: [],
             createdAt: Date.now(),
           }];
         }
@@ -470,6 +559,7 @@ export const useWidgetStore = create<WidgetStore>()(
           reasoningStreamingIds: [],
           viewports: migrateViewports(stored.viewports),
           widgets,
+          textBlocks,
         };
       },
     }

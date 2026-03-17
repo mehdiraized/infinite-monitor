@@ -1,10 +1,11 @@
 import { eq, sql } from "drizzle-orm";
 import { db, schema } from ".";
 
-const { widgets, dashboards } = schema;
+const { widgets, dashboards, textBlocks } = schema;
 
 export type WidgetRecord = typeof widgets.$inferSelect;
 export type DashboardRecord = typeof dashboards.$inferSelect;
+export type TextBlockRecord = typeof textBlocks.$inferSelect;
 
 // ── Widgets ──
 
@@ -113,6 +114,7 @@ export function upsertDashboard(data: {
   id: string;
   title?: string;
   widgetIdsJson?: string | null;
+  textBlockIdsJson?: string | null;
 }) {
   const existing = getDashboard(data.id);
   if (existing) {
@@ -126,6 +128,7 @@ export function upsertDashboard(data: {
         id: data.id,
         title: data.title ?? "Dashboard",
         widgetIdsJson: data.widgetIdsJson ?? null,
+        textBlockIdsJson: data.textBlockIdsJson ?? null,
       })
       .run();
   }
@@ -135,10 +138,48 @@ export function deleteDashboard(id: string) {
   db.delete(dashboards).where(eq(dashboards.id, id)).run();
 }
 
+// ── Text Blocks ──
+
+export function getTextBlock(id: string): TextBlockRecord | undefined {
+  return db.select().from(textBlocks).where(eq(textBlocks.id, id)).get();
+}
+
+export function getAllTextBlocks(): TextBlockRecord[] {
+  return db.select().from(textBlocks).all();
+}
+
+export function upsertTextBlock(data: {
+  id: string;
+  text?: string;
+  fontSize?: number;
+  layoutJson?: string | null;
+}) {
+  const existing = getTextBlock(data.id);
+  if (existing) {
+    db.update(textBlocks)
+      .set({ ...data, updatedAt: sql`(unixepoch())` })
+      .where(eq(textBlocks.id, data.id))
+      .run();
+  } else {
+    db.insert(textBlocks)
+      .values({
+        id: data.id,
+        text: data.text ?? "",
+        fontSize: data.fontSize ?? 24,
+        layoutJson: data.layoutJson ?? null,
+      })
+      .run();
+  }
+}
+
+export function deleteTextBlock(id: string) {
+  db.delete(textBlocks).where(eq(textBlocks.id, id)).run();
+}
+
 // ── Bulk sync (for local-first push/pull) ──
 
 export function syncState(data: {
-  dashboards: Array<{ id: string; title: string; widgetIds: string[]; createdAt: number }>;
+  dashboards: Array<{ id: string; title: string; widgetIds: string[]; textBlockIds?: string[]; createdAt: number }>;
   widgets: Array<{
     id: string;
     title: string;
@@ -148,12 +189,19 @@ export function syncState(data: {
     layout: unknown;
     messages: unknown[];
   }>;
+  textBlocks?: Array<{
+    id: string;
+    text: string;
+    fontSize: number;
+    layout: unknown;
+  }>;
 }) {
   for (const d of data.dashboards) {
     upsertDashboard({
       id: d.id,
       title: d.title,
       widgetIdsJson: JSON.stringify(d.widgetIds),
+      textBlockIdsJson: JSON.stringify(d.textBlockIds ?? []),
     });
   }
   for (const w of data.widgets) {
@@ -167,6 +215,14 @@ export function syncState(data: {
       messagesJson: JSON.stringify(w.messages),
     });
   }
+  for (const tb of data.textBlocks ?? []) {
+    upsertTextBlock({
+      id: tb.id,
+      text: tb.text,
+      fontSize: tb.fontSize,
+      layoutJson: JSON.stringify(tb.layout),
+    });
+  }
 }
 
 export function getFullState() {
@@ -174,6 +230,7 @@ export function getFullState() {
     id: d.id,
     title: d.title,
     widgetIds: d.widgetIdsJson ? JSON.parse(d.widgetIdsJson) : [],
+    textBlockIds: d.textBlockIdsJson ? JSON.parse(d.textBlockIdsJson) : [],
     createdAt: d.createdAt instanceof Date ? d.createdAt.getTime() / 1000 : d.createdAt,
   }));
   const allWidgets = getAllWidgets().map((w) => ({
@@ -185,5 +242,11 @@ export function getFullState() {
     layout: w.layoutJson ? JSON.parse(w.layoutJson) : null,
     messages: w.messagesJson ? JSON.parse(w.messagesJson) : [],
   }));
-  return { dashboards: allDashboards, widgets: allWidgets };
+  const allTextBlocks = getAllTextBlocks().map((tb) => ({
+    id: tb.id,
+    text: tb.text,
+    fontSize: tb.fontSize,
+    layout: tb.layoutJson ? JSON.parse(tb.layoutJson) : { x: 0, y: 0, w: 3, h: 1 },
+  }));
+  return { dashboards: allDashboards, widgets: allWidgets, textBlocks: allTextBlocks };
 }
