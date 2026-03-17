@@ -5,7 +5,6 @@ import { DashboardGrid } from "@/components/dashboard-grid";
 import { ChatSidebar } from "@/components/chat-sidebar";
 import { AddMenu } from "@/components/add-menu";
 import { DashboardPicker } from "@/components/dashboard-picker";
-import { McpConfigDialog } from "@/components/mcp-config-dialog";
 import { ScrambleText } from "@/components/scramble-text";
 import { Star } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
@@ -55,7 +54,6 @@ export default function Home() {
                 </>
               )}
             </a>
-            <McpConfigDialog />
             <DashboardPicker />
             <AddMenu />
           </div>

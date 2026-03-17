@@ -7,7 +7,7 @@ import {
   ReasoningContent,
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
-import { MessageSquareDashed, Pencil, X } from "lucide-react";
+import { MessageSquareDashed, Pencil, X, Cable } from "lucide-react";
 import { nanoid } from "nanoid";
 import {
   Conversation,
@@ -45,6 +45,7 @@ import { useWidgetStore, type WidgetMessage, type MessageAttachment } from "@/st
 import { useSettingsStore } from "@/store/settings-store";
 import { PROVIDERS, parseModelString, findProvider } from "@/lib/model-registry";
 import { SearchProviderPicker } from "@/components/search-provider-picker";
+import { McpConfigDialog } from "@/components/mcp-config-dialog";
 
 interface PendingFile {
   id: string;
@@ -465,6 +466,9 @@ function useModelSelector() {
 
 export function ChatSidebar() {
   const { trigger: modelTrigger, keyInputEl: modelKeyInput } = useModelSelector();
+  const [mcpOpen, setMcpOpen] = useState(false);
+  const mcpServers = useSettingsStore((s) => s.mcpServers);
+  const enabledMcpCount = mcpServers.filter((s) => s.enabled).length;
   const widgets = useWidgetStore((s) => s.widgets);
   const activeWidgetId = useWidgetStore((s) => s.activeWidgetId);
   const streamingWidgetIds = useWidgetStore((s) => s.streamingWidgetIds);
@@ -799,6 +803,26 @@ export function ChatSidebar() {
                   <>
                     {modelTrigger}
                     <SearchProviderPicker disabled={isActiveStreaming} />
+                    <button
+                      type="button"
+                      onClick={() => setMcpOpen(true)}
+                      disabled={isActiveStreaming}
+                      className={cn(
+                        "inline-flex h-7 items-center gap-1.5 px-2 text-xs transition-colors cursor-pointer",
+                        enabledMcpCount > 0
+                          ? "text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800"
+                          : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800",
+                        isActiveStreaming && "opacity-50 cursor-not-allowed"
+                      )}
+                    >
+                      <Cable className="size-3.5" />
+                      {enabledMcpCount > 0 && (
+                        <span className="flex items-center justify-center min-w-[14px] h-3.5 px-0.5 text-[8px] bg-zinc-700 text-zinc-200">
+                          {enabledMcpCount}
+                        </span>
+                      )}
+                    </button>
+                    <McpConfigDialog open={mcpOpen} onOpenChange={setMcpOpen} />
                   </>
                 )}
               </div>
