@@ -3,14 +3,17 @@ import { persist } from "zustand/middleware";
 import { DEFAULT_MODEL } from "@/lib/model-registry";
 import type { SearchProvider } from "@/lib/web-search";
 
-export type McpTransportType = "http" | "sse";
+export type McpTransportType = "command" | "sse" | "streamableHttp";
 
 export interface McpServerConfig {
   id: string;
   name: string;
-  url: string;
-  transportType: McpTransportType;
-  headers: Record<string, string>;
+  type: McpTransportType;
+  command?: string;
+  args?: string[];
+  url?: string;
+  headers?: Record<string, string>;
+  env?: Record<string, string>;
   enabled: boolean;
 }
 

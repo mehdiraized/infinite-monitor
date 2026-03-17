@@ -18,10 +18,13 @@ import { webSearch, type SearchProvider } from "@/lib/web-search";
 import { scanUrls } from "@/lib/brin";
 
 interface McpServerPayload {
-  url: string;
-  transportType: "http" | "sse";
-  headers: Record<string, string>;
   name: string;
+  type: "command" | "sse" | "streamableHttp";
+  url?: string;
+  command?: string;
+  args?: string[];
+  headers?: Record<string, string>;
+  env?: Record<string, string>;
 }
 
 const SYSTEM_PROMPT = `You are a coding agent that builds React widget components.
@@ -264,13 +267,28 @@ export async function POST(request: Request) {
   if (mcpServerConfigs && mcpServerConfigs.length > 0) {
     const results = await Promise.allSettled(
       mcpServerConfigs.map(async (cfg) => {
-        const client = await createMCPClient({
-          transport: {
-            type: cfg.transportType,
-            url: cfg.url,
-            headers: cfg.headers ?? {},
-          },
-        });
+        let client: Awaited<ReturnType<typeof createMCPClient>>;
+
+        if (cfg.type === "command") {
+          const { Experimental_StdioMCPTransport } = await import("@ai-sdk/mcp/mcp-stdio");
+          client = await createMCPClient({
+            transport: new Experimental_StdioMCPTransport({
+              command: cfg.command!,
+              args: cfg.args ?? [],
+              env: { ...process.env, ...(cfg.env ?? {}) } as Record<string, string>,
+            }),
+          });
+        } else {
+          const transportType = cfg.type === "streamableHttp" ? "http" : "sse";
+          client = await createMCPClient({
+            transport: {
+              type: transportType,
+              url: cfg.url!,
+              headers: cfg.headers ?? {},
+            },
+          });
+        }
+
         mcpClients.push(client);
         const mcpTools = await client.tools();
         return { name: cfg.name, tools: mcpTools };

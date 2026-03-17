@@ -1,17 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { nanoid } from "nanoid";
 import {
   Cable,
   Plus,
   Trash2,
+  RotateCw,
   ChevronDown,
   ChevronRight,
-  Circle,
   Loader2,
-  CheckCircle2,
-  XCircle,
 } from "lucide-react";
 import {
   Dialog,
@@ -29,227 +27,354 @@ import {
   type McpTransportType,
 } from "@/store/settings-store";
 
-type ConnectionStatus = "idle" | "testing" | "success" | "error";
+type ServerStatus = "unknown" | "loading" | "connected" | "error";
 
-interface ServerFormState {
+interface ToolInfo {
   name: string;
-  url: string;
-  transportType: McpTransportType;
-  headerKey: string;
-  headerValue: string;
-  headers: Record<string, string>;
+  description?: string;
 }
 
-const EMPTY_FORM: ServerFormState = {
-  name: "",
-  url: "",
-  transportType: "http",
-  headerKey: "",
-  headerValue: "",
-  headers: {},
-};
+interface ServerState {
+  status: ServerStatus;
+  tools: ToolInfo[];
+  error?: string;
+}
 
-function ServerForm({
-  initial,
+const serverStates = new Map<string, ServerState>();
+
+function StatusDot({ status }: { status: ServerStatus }) {
+  return (
+    <span
+      className={cn(
+        "inline-block size-2 shrink-0",
+        status === "connected" && "bg-emerald-400",
+        status === "error" && "bg-red-400",
+        status === "loading" && "bg-yellow-400 animate-pulse",
+        status === "unknown" && "bg-zinc-600"
+      )}
+      style={{ borderRadius: "50%" }}
+    />
+  );
+}
+
+function useServerState(serverId: string): [ServerState, (s: ServerState) => void] {
+  const [state, setState] = useState<ServerState>(
+    () => serverStates.get(serverId) ?? { status: "unknown", tools: [] }
+  );
+
+  const update = useCallback(
+    (next: ServerState) => {
+      serverStates.set(serverId, next);
+      setState(next);
+    },
+    [serverId]
+  );
+
+  return [state, update];
+}
+
+async function fetchServerTools(
+  server: McpServerConfig,
+  setServerState: (s: ServerState) => void
+) {
+  setServerState({ status: "loading", tools: [] });
+  try {
+    const res = await fetch("/api/mcp/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: server.type,
+        url: server.url,
+        command: server.command,
+        args: server.args,
+        headers: server.headers,
+        env: server.env,
+      }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setServerState({
+        status: "connected",
+        tools: (data.tools ?? []).map((name: string) => ({ name })),
+      });
+    } else {
+      setServerState({
+        status: "error",
+        tools: [],
+        error: data.error ?? "Connection failed",
+      });
+    }
+  } catch (err) {
+    setServerState({
+      status: "error",
+      tools: [],
+      error: String(err),
+    });
+  }
+}
+
+function ServerRow({ server }: { server: McpServerConfig }) {
+  const toggleMcpServer = useSettingsStore((s) => s.toggleMcpServer);
+  const removeMcpServer = useSettingsStore((s) => s.removeMcpServer);
+  const [expanded, setExpanded] = useState(false);
+  const [serverState, setServerState] = useServerState(server.id);
+
+  const subtitle =
+    server.type === "command"
+      ? [server.command, ...(server.args ?? [])].join(" ")
+      : server.url ?? "";
+
+  return (
+    <div
+      className={cn(
+        "border border-zinc-800 transition-colors",
+        !server.enabled && "opacity-50"
+      )}
+    >
+      <div className="flex items-center gap-2.5 px-3 py-2.5">
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="text-zinc-500 hover:text-zinc-300 transition-colors"
+        >
+          {expanded ? (
+            <ChevronDown className="size-3.5" />
+          ) : (
+            <ChevronRight className="size-3.5" />
+          )}
+        </button>
+
+        <StatusDot status={serverState.status} />
+
+        <div className="flex-1 min-w-0">
+          <div className="text-xs text-zinc-200 truncate">{server.name}</div>
+          <div className="text-[10px] text-zinc-500 truncate font-mono">
+            {subtitle}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => fetchServerTools(server, setServerState)}
+          disabled={serverState.status === "loading"}
+          className="text-zinc-600 hover:text-zinc-300 transition-colors disabled:opacity-40 p-1"
+          title="Refresh tools"
+        >
+          {serverState.status === "loading" ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : (
+            <RotateCw className="size-3" />
+          )}
+        </button>
+
+        <Switch
+          checked={server.enabled}
+          onCheckedChange={() => toggleMcpServer(server.id)}
+        />
+
+        <button
+          type="button"
+          onClick={() => removeMcpServer(server.id)}
+          className="text-zinc-600 hover:text-red-400 transition-colors p-1"
+        >
+          <Trash2 className="size-3" />
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="border-t border-zinc-800 px-3 py-2 space-y-1.5">
+          {serverState.status === "error" && serverState.error && (
+            <p className="text-[10px] text-red-400">{serverState.error}</p>
+          )}
+
+          {serverState.status === "connected" &&
+            serverState.tools.length > 0 && (
+              <div className="space-y-0.5">
+                <span className="text-[9px] uppercase tracking-wider text-zinc-500">
+                  {serverState.tools.length} tool
+                  {serverState.tools.length !== 1 && "s"} available
+                </span>
+                {serverState.tools.map((t) => (
+                  <div
+                    key={t.name}
+                    className="flex items-center gap-2 py-0.5 text-[11px] text-zinc-400 font-mono"
+                  >
+                    <span className="size-1 bg-zinc-600 shrink-0" style={{ borderRadius: "50%" }} />
+                    {t.name}
+                  </div>
+                ))}
+              </div>
+            )}
+
+          {serverState.status === "connected" &&
+            serverState.tools.length === 0 && (
+              <p className="text-[10px] text-zinc-500">
+                No tools discovered. The server may not expose any tools.
+              </p>
+            )}
+
+          {serverState.status === "unknown" && (
+            <p className="text-[10px] text-zinc-500">
+              Click the refresh button to load tools from this server.
+            </p>
+          )}
+
+          {serverState.status === "loading" && (
+            <p className="text-[10px] text-zinc-500">Connecting…</p>
+          )}
+
+          <div className="pt-1 space-y-1">
+            <div className="flex items-center gap-2 text-[10px]">
+              <span className="text-zinc-600 uppercase tracking-wider w-14 shrink-0">Type</span>
+              <span className="text-zinc-400">{server.type}</span>
+            </div>
+            {server.type === "command" && (
+              <div className="flex items-center gap-2 text-[10px]">
+                <span className="text-zinc-600 uppercase tracking-wider w-14 shrink-0">Cmd</span>
+                <span className="text-zinc-400 font-mono truncate">
+                  {[server.command, ...(server.args ?? [])].join(" ")}
+                </span>
+              </div>
+            )}
+            {server.url && (
+              <div className="flex items-center gap-2 text-[10px]">
+                <span className="text-zinc-600 uppercase tracking-wider w-14 shrink-0">URL</span>
+                <span className="text-zinc-400 font-mono truncate">
+                  {server.url}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const TRANSPORT_OPTIONS: { value: McpTransportType; label: string }[] = [
+  { value: "command", label: "command" },
+  { value: "sse", label: "sse" },
+  { value: "streamableHttp", label: "streamableHttp" },
+];
+
+function AddServerForm({
   onSave,
   onCancel,
 }: {
-  initial?: McpServerConfig;
-  onSave: (data: Omit<McpServerConfig, "id" | "enabled">) => void;
+  onSave: (server: McpServerConfig) => void;
   onCancel: () => void;
 }) {
-  const [form, setForm] = useState<ServerFormState>(
-    initial
-      ? {
-          name: initial.name,
-          url: initial.url,
-          transportType: initial.transportType,
-          headerKey: "",
-          headerValue: "",
-          headers: { ...initial.headers },
-        }
-      : { ...EMPTY_FORM }
-  );
-  const [connectionStatus, setConnectionStatus] =
-    useState<ConnectionStatus>("idle");
-  const [errorMsg, setErrorMsg] = useState("");
+  const [name, setName] = useState("");
+  const [type, setType] = useState<McpTransportType>("command");
+  const [value, setValue] = useState("");
+  const [typeOpen, setTypeOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const canSave = form.name.trim() && form.url.trim();
-
-  function addHeader() {
-    if (!form.headerKey.trim()) return;
-    setForm((f) => ({
-      ...f,
-      headers: { ...f.headers, [f.headerKey.trim()]: f.headerValue },
-      headerKey: "",
-      headerValue: "",
-    }));
-  }
-
-  function removeHeader(key: string) {
-    setForm((f) => {
-      const next = { ...f.headers };
-      delete next[key];
-      return { ...f, headers: next };
-    });
-  }
-
-  async function testConnection() {
-    setConnectionStatus("testing");
-    setErrorMsg("");
-    try {
-      const res = await fetch("/api/mcp/test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: form.url,
-          transportType: form.transportType,
-          headers: form.headers,
-        }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        setConnectionStatus("success");
-      } else {
-        setConnectionStatus("error");
-        setErrorMsg(data.error ?? "Connection failed");
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setTypeOpen(false);
       }
-    } catch (err) {
-      setConnectionStatus("error");
-      setErrorMsg(String(err));
     }
+    if (typeOpen) document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [typeOpen]);
+
+  const isUrl = type === "sse" || type === "streamableHttp";
+  const placeholder = isUrl
+    ? "https://mcp-server.example.com/sse"
+    : "npx -y @modelcontextprotocol/server-example";
+
+  const canSave = name.trim() && value.trim();
+
+  function handleSave() {
+    if (!canSave) return;
+
+    const server: McpServerConfig = {
+      id: nanoid(),
+      name: name.trim(),
+      type,
+      enabled: true,
+    };
+
+    if (isUrl) {
+      server.url = value.trim();
+    } else {
+      const parts = value.trim().split(/\s+/);
+      server.command = parts[0];
+      server.args = parts.slice(1);
+    }
+
+    onSave(server);
   }
 
   return (
     <div className="space-y-3">
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <label className="block text-[10px] uppercase tracking-wider text-zinc-500">
           Name
         </label>
         <input
           type="text"
-          value={form.name}
-          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          placeholder="My MCP Server"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="my-mcp-server"
+          autoFocus
           className="w-full bg-zinc-950 border border-zinc-800 text-xs px-2.5 py-2 text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
         />
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <label className="block text-[10px] uppercase tracking-wider text-zinc-500">
-          URL
+          Type
         </label>
-        <input
-          type="url"
-          value={form.url}
-          onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
-          placeholder="https://mcp-server.example.com/mcp"
-          className="w-full bg-zinc-950 border border-zinc-800 text-xs px-2.5 py-2 text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
-        />
-      </div>
-
-      <div className="space-y-2">
-        <label className="block text-[10px] uppercase tracking-wider text-zinc-500">
-          Transport
-        </label>
-        <div className="flex gap-2">
-          {(["http", "sse"] as const).map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setForm((f) => ({ ...f, transportType: t }))}
-              className={cn(
-                "px-3 py-1.5 text-xs uppercase tracking-wider border transition-colors",
-                form.transportType === t
-                  ? "border-zinc-500 bg-zinc-800 text-zinc-200"
-                  : "border-zinc-800 bg-zinc-950 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700"
-              )}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <label className="block text-[10px] uppercase tracking-wider text-zinc-500">
-          Headers
-        </label>
-        {Object.entries(form.headers).map(([key, value]) => (
-          <div key={key} className="flex items-center gap-1.5 text-xs">
-            <span className="text-zinc-400 font-mono">{key}:</span>
-            <span className="text-zinc-500 font-mono truncate flex-1">
-              {key.toLowerCase().includes("auth") ||
-              key.toLowerCase().includes("key") ||
-              key.toLowerCase().includes("secret") ||
-              key.toLowerCase().includes("token")
-                ? "••••••••"
-                : value}
-            </span>
-            <button
-              type="button"
-              onClick={() => removeHeader(key)}
-              className="text-zinc-600 hover:text-zinc-400 transition-colors"
-            >
-              <Trash2 className="size-3" />
-            </button>
-          </div>
-        ))}
-        <div className="flex items-center gap-1.5">
-          <input
-            type="text"
-            value={form.headerKey}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, headerKey: e.target.value }))
-            }
-            onKeyDown={(e) => e.key === "Enter" && addHeader()}
-            placeholder="Header name"
-            className="flex-1 bg-zinc-950 border border-zinc-800 text-xs px-2 py-1.5 text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
-          />
-          <input
-            type="text"
-            value={form.headerValue}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, headerValue: e.target.value }))
-            }
-            onKeyDown={(e) => e.key === "Enter" && addHeader()}
-            placeholder="Value"
-            className="flex-1 bg-zinc-950 border border-zinc-800 text-xs px-2 py-1.5 text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
-          />
+        <div className="relative" ref={dropdownRef}>
           <button
             type="button"
-            onClick={addHeader}
-            disabled={!form.headerKey.trim()}
-            className="px-2 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors disabled:opacity-40"
+            onClick={() => setTypeOpen(!typeOpen)}
+            className="w-full flex items-center justify-between bg-zinc-950 border border-zinc-800 text-xs px-2.5 py-2 text-zinc-300 hover:border-zinc-600 transition-colors"
           >
-            Add
+            <span className="font-mono">{type}</span>
+            <ChevronDown className="size-3 text-zinc-500" />
           </button>
+          {typeOpen && (
+            <div className="absolute top-full left-0 right-0 z-10 mt-0.5 border border-zinc-700 bg-zinc-900 shadow-xl">
+              {TRANSPORT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => {
+                    setType(opt.value);
+                    setTypeOpen(false);
+                    setValue("");
+                  }}
+                  className={cn(
+                    "w-full text-left px-2.5 py-2 text-xs font-mono transition-colors",
+                    opt.value === type
+                      ? "bg-zinc-800 text-zinc-100"
+                      : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="flex items-center gap-2 pt-1">
-        <button
-          type="button"
-          onClick={testConnection}
-          disabled={!form.url.trim() || connectionStatus === "testing"}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs border border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-40"
-        >
-          {connectionStatus === "testing" ? (
-            <Loader2 className="size-3 animate-spin" />
-          ) : connectionStatus === "success" ? (
-            <CheckCircle2 className="size-3 text-emerald-400" />
-          ) : connectionStatus === "error" ? (
-            <XCircle className="size-3 text-red-400" />
-          ) : (
-            <Circle className="size-3" />
-          )}
-          Test connection
-        </button>
-        {connectionStatus === "error" && errorMsg && (
-          <span className="text-[10px] text-red-400 truncate flex-1">
-            {errorMsg}
-          </span>
-        )}
+      <div className="space-y-1.5">
+        <label className="block text-[10px] uppercase tracking-wider text-zinc-500">
+          {isUrl ? "URL" : "Command"}
+        </label>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleSave()}
+          placeholder={placeholder}
+          className="w-full bg-zinc-950 border border-zinc-800 text-xs px-2.5 py-2 text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 font-mono"
+        />
       </div>
 
       <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
@@ -263,64 +388,12 @@ function ServerForm({
         <button
           type="button"
           disabled={!canSave}
-          onClick={() =>
-            onSave({
-              name: form.name.trim(),
-              url: form.url.trim(),
-              transportType: form.transportType,
-              headers: form.headers,
-            })
-          }
+          onClick={handleSave}
           className="px-3 py-1.5 text-xs bg-zinc-100 text-zinc-900 hover:bg-white transition-colors disabled:opacity-40"
         >
-          Save
+          Add
         </button>
       </div>
-    </div>
-  );
-}
-
-function ServerRow({
-  server,
-  onEdit,
-}: {
-  server: McpServerConfig;
-  onEdit: (id: string) => void;
-}) {
-  const toggleMcpServer = useSettingsStore((s) => s.toggleMcpServer);
-  const removeMcpServer = useSettingsStore((s) => s.removeMcpServer);
-
-  return (
-    <div
-      className={cn(
-        "flex items-center gap-3 px-3 py-2.5 border border-zinc-800 transition-colors",
-        server.enabled ? "bg-zinc-900/50" : "bg-zinc-950/50 opacity-60"
-      )}
-    >
-      <Switch
-        checked={server.enabled}
-        onCheckedChange={() => toggleMcpServer(server.id)}
-      />
-      <button
-        type="button"
-        onClick={() => onEdit(server.id)}
-        className="flex-1 min-w-0 text-left"
-      >
-        <div className="text-xs text-zinc-200 truncate">{server.name}</div>
-        <div className="text-[10px] text-zinc-500 truncate font-mono">
-          {server.url}
-        </div>
-      </button>
-      <span className="text-[9px] uppercase tracking-wider text-zinc-600 shrink-0">
-        {server.transportType}
-      </span>
-      <button
-        type="button"
-        onClick={() => removeMcpServer(server.id)}
-        className="text-zinc-600 hover:text-red-400 transition-colors shrink-0"
-      >
-        <Trash2 className="size-3.5" />
-      </button>
     </div>
   );
 }
@@ -328,43 +401,20 @@ function ServerRow({
 export function McpConfigDialog() {
   const mcpServers = useSettingsStore((s) => s.mcpServers);
   const addMcpServer = useSettingsStore((s) => s.addMcpServer);
-  const updateMcpServer = useSettingsStore((s) => s.updateMcpServer);
 
   const [open, setOpen] = useState(false);
-  const [view, setView] = useState<"list" | "add" | "edit">("list");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(true);
-
-  const editingServer = editingId
-    ? mcpServers.find((s) => s.id === editingId)
-    : null;
+  const [showAdd, setShowAdd] = useState(false);
 
   const enabledCount = mcpServers.filter((s) => s.enabled).length;
 
-  function handleSaveNew(data: Omit<McpServerConfig, "id" | "enabled">) {
-    addMcpServer({ ...data, id: nanoid(), enabled: true });
-    setView("list");
-  }
-
-  function handleSaveEdit(data: Omit<McpServerConfig, "id" | "enabled">) {
-    if (editingId) {
-      updateMcpServer(editingId, data);
-    }
-    setEditingId(null);
-    setView("list");
-  }
-
-  function handleEdit(id: string) {
-    setEditingId(id);
-    setView("edit");
+  function handleAdd(server: McpServerConfig) {
+    addMcpServer(server);
+    setShowAdd(false);
   }
 
   function handleOpenChange(nextOpen: boolean) {
     setOpen(nextOpen);
-    if (!nextOpen) {
-      setView("list");
-      setEditingId(null);
-    }
+    if (!nextOpen) setShowAdd(false);
   }
 
   return (
@@ -397,37 +447,8 @@ export function McpConfigDialog() {
           </DialogTitle>
         </DialogHeader>
 
-        {view === "list" && (
-          <div className="space-y-3">
-            {mcpServers.length > 0 && (
-              <div className="space-y-1.5">
-                <button
-                  type="button"
-                  onClick={() => setExpanded(!expanded)}
-                  className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
-                >
-                  {expanded ? (
-                    <ChevronDown className="size-3" />
-                  ) : (
-                    <ChevronRight className="size-3" />
-                  )}
-                  {mcpServers.length} server{mcpServers.length !== 1 && "s"}{" "}
-                  configured
-                </button>
-                {expanded && (
-                  <div className="space-y-1.5">
-                    {mcpServers.map((server) => (
-                      <ServerRow
-                        key={server.id}
-                        server={server}
-                        onEdit={handleEdit}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
+        {!showAdd && (
+          <div className="space-y-2">
             {mcpServers.length === 0 && (
               <div className="py-6 text-center">
                 <Cable className="size-8 mx-auto text-zinc-700 mb-3" />
@@ -435,38 +456,31 @@ export function McpConfigDialog() {
                   No MCP servers configured
                 </p>
                 <p className="text-[10px] text-zinc-600">
-                  Connect external tools and data sources to your agents via the
-                  Model Context Protocol.
+                  Connect tools and data sources to your agents via the Model
+                  Context Protocol.
                 </p>
               </div>
             )}
 
+            {mcpServers.map((server) => (
+              <ServerRow key={server.id} server={server} />
+            ))}
+
             <button
               type="button"
-              onClick={() => setView("add")}
+              onClick={() => setShowAdd(true)}
               className="flex items-center gap-2 w-full px-3 py-2.5 text-xs border border-dashed border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 transition-colors"
             >
               <Plus className="size-3.5" />
-              Add MCP server
+              Add new MCP server
             </button>
           </div>
         )}
 
-        {view === "add" && (
-          <ServerForm
-            onSave={handleSaveNew}
-            onCancel={() => setView("list")}
-          />
-        )}
-
-        {view === "edit" && editingServer && (
-          <ServerForm
-            initial={editingServer}
-            onSave={handleSaveEdit}
-            onCancel={() => {
-              setEditingId(null);
-              setView("list");
-            }}
+        {showAdd && (
+          <AddServerForm
+            onSave={handleAdd}
+            onCancel={() => setShowAdd(false)}
           />
         )}
       </DialogContent>

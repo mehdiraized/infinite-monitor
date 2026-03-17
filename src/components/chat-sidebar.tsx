@@ -248,10 +248,13 @@ async function streamToWidget(
     const enabledMcpServers = mcpServers
       .filter((s) => s.enabled)
       .map((s) => ({
-        url: s.url,
-        transportType: s.transportType,
-        headers: s.headers,
         name: s.name,
+        type: s.type,
+        url: s.url,
+        command: s.command,
+        args: s.args,
+        headers: s.headers,
+        env: s.env,
       }));
 
     const res = await fetch("/api/chat", {
