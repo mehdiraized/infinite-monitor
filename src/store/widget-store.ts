@@ -121,22 +121,25 @@ function migrateViewports(
   return migrated;
 }
 
-export function getNextPosition(widgets: Widget[], widgetIds: string[]): { x: number; y: number } {
-  const dashboardWidgets = widgets.filter((w) => widgetIds.includes(w.id));
-  if (dashboardWidgets.length === 0) return { x: 0, y: 0 };
-
-  let maxRight = 0;
-  let yAtMaxRight = 0;
-
-  for (const w of dashboardWidgets) {
-    const right = w.layout.x + w.layout.w;
-    if (right > maxRight) {
-      maxRight = right;
-      yAtMaxRight = w.layout.y;
-    }
-  }
-
-  return { x: maxRight, y: yAtMaxRight };
+export function shiftItemsDown(
+  widgets: Widget[],
+  widgetIds: string[],
+  textBlocks: TextBlock[],
+  textBlockIds: string[],
+  amount: number,
+): { widgets: Widget[]; textBlocks: TextBlock[] } {
+  return {
+    widgets: widgets.map((w) =>
+      widgetIds.includes(w.id)
+        ? { ...w, layout: { ...w.layout, y: w.layout.y + amount } }
+        : w,
+    ),
+    textBlocks: textBlocks.map((tb) =>
+      textBlockIds.includes(tb.id)
+        ? { ...tb, layout: { ...tb.layout, y: tb.layout.y + amount } }
+        : tb,
+    ),
+  };
 }
 
 export const useWidgetStore = create<WidgetStore>()(
@@ -194,7 +197,7 @@ export const useWidgetStore = create<WidgetStore>()(
       },
 
       addWidget: (title = "Untitled Widget", description = "") => {
-        const { widgets, dashboards, activeDashboardId } = get();
+        const { widgets, dashboards, activeDashboardId, textBlocks } = get();
         let dashId = activeDashboardId;
 
         if (!dashId || !dashboards.find((d) => d.id === dashId)) {
@@ -206,7 +209,7 @@ export const useWidgetStore = create<WidgetStore>()(
         }
 
         const dashboard = get().dashboards.find((d) => d.id === dashId);
-        const pos = getNextPosition(widgets, dashboard?.widgetIds ?? []);
+        const newHeight = 3;
         const id = generateId("widget");
 
         const widget: Widget = {
@@ -218,15 +221,24 @@ export const useWidgetStore = create<WidgetStore>()(
           files: {},
           iframeVersion: 0,
           layout: {
-            x: pos.x,
-            y: pos.y,
+            x: 0,
+            y: 0,
             w: 4,
-            h: 3,
+            h: newHeight,
           },
         };
 
+        const shifted = shiftItemsDown(
+          widgets,
+          dashboard?.widgetIds ?? [],
+          textBlocks,
+          dashboard?.textBlockIds ?? [],
+          newHeight,
+        );
+
         set((state) => ({
-          widgets: [...state.widgets, widget],
+          widgets: [...shifted.widgets, widget],
+          textBlocks: shifted.textBlocks,
           dashboards: state.dashboards.map((d) =>
             d.id === dashId ? { ...d, widgetIds: [...d.widgetIds, id] } : d
           ),
@@ -439,7 +451,7 @@ export const useWidgetStore = create<WidgetStore>()(
       },
 
       addTextBlock: (position) => {
-        const { dashboards, activeDashboardId, widgets } = get();
+        const { dashboards, activeDashboardId, widgets, textBlocks } = get();
         let dashId = activeDashboardId;
 
         if (!dashId || !dashboards.find((d) => d.id === dashId)) {
@@ -451,22 +463,39 @@ export const useWidgetStore = create<WidgetStore>()(
         }
 
         const dashboard = get().dashboards.find((d) => d.id === dashId);
-        const pos = position ?? getNextPosition(widgets, dashboard?.widgetIds ?? []);
+        const newHeight = 1;
         const id = generateId("text");
 
         const block: TextBlock = {
           id,
           text: "",
           fontSize: 24,
-          layout: { x: pos.x, y: pos.y, w: 3, h: 1 },
+          layout: { x: position?.x ?? 0, y: position?.y ?? 0, w: 3, h: newHeight },
         };
 
-        set((state) => ({
-          textBlocks: [...state.textBlocks, block],
-          dashboards: state.dashboards.map((d) =>
-            d.id === dashId ? { ...d, textBlockIds: [...(d.textBlockIds ?? []), id] } : d
-          ),
-        }));
+        if (!position) {
+          const shifted = shiftItemsDown(
+            widgets,
+            dashboard?.widgetIds ?? [],
+            textBlocks,
+            dashboard?.textBlockIds ?? [],
+            newHeight,
+          );
+          set((state) => ({
+            widgets: shifted.widgets,
+            textBlocks: [...shifted.textBlocks, block],
+            dashboards: state.dashboards.map((d) =>
+              d.id === dashId ? { ...d, textBlockIds: [...(d.textBlockIds ?? []), id] } : d
+            ),
+          }));
+        } else {
+          set((state) => ({
+            textBlocks: [...state.textBlocks, block],
+            dashboards: state.dashboards.map((d) =>
+              d.id === dashId ? { ...d, textBlockIds: [...(d.textBlockIds ?? []), id] } : d
+            ),
+          }));
+        }
         return id;
       },
 
