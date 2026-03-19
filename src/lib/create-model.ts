@@ -14,15 +14,7 @@ import { createMoonshotAI } from "@ai-sdk/moonshotai";
 import { createAlibaba } from "@ai-sdk/alibaba";
 import { createDeepInfra } from "@ai-sdk/deepinfra";
 
-export interface CustomApiConfig {
-  id: string;
-  name: string;
-  endpoint: string;
-  type: "anthropic" | "openai";
-  apiKey?: string;
-  models: Array<{ id: string; name: string }>;
-  enabled: boolean;
-}
+import type { CustomApiConfig } from "@/store/settings-store";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ProviderFactory = (opts?: { apiKey?: string; baseURL?: string }) => (modelId: string) => any;

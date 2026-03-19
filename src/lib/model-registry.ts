@@ -193,17 +193,7 @@ export const DEFAULT_MODEL = "anthropic:claude-sonnet-4-6";
 
 export const CUSTOM_PROVIDER_PREFIX = "custom:";
 
-export interface CustomApiConfig {
-  id: string;
-  name: string;
-  endpoint: string;
-  type: "anthropic" | "openai";
-  apiKey?: string;
-  models: Array<{ id: string; name: string }>;
-  enabled: boolean;
-}
-
-export function createCustomProviderInfo(config: CustomApiConfig): ProviderInfo {
+export function createCustomProviderInfo(config: import("@/store/settings-store").CustomApiConfig): ProviderInfo {
   return {
     id: `${CUSTOM_PROVIDER_PREFIX}${config.id}`,
     name: config.name,
@@ -222,6 +212,15 @@ export function findProvider(providerId: string): ProviderInfo | undefined {
 }
 
 export function parseModelString(modelStr: string): { providerId: string; modelId: string } {
+  if (modelStr.startsWith(CUSTOM_PROVIDER_PREFIX)) {
+    const rest = modelStr.slice(CUSTOM_PROVIDER_PREFIX.length);
+    const idx = rest.indexOf(":");
+    if (idx === -1) return { providerId: modelStr, modelId: "" };
+    return {
+      providerId: CUSTOM_PROVIDER_PREFIX + rest.slice(0, idx),
+      modelId: rest.slice(idx + 1),
+    };
+  }
   const idx = modelStr.indexOf(":");
   if (idx === -1) return { providerId: "anthropic", modelId: modelStr };
   return { providerId: modelStr.slice(0, idx), modelId: modelStr.slice(idx + 1) };
@@ -229,8 +228,4 @@ export function parseModelString(modelStr: string): { providerId: string; modelI
 
 export function isCustomProvider(providerId: string): boolean {
   return providerId.startsWith(CUSTOM_PROVIDER_PREFIX);
-}
-
-export function getCustomProviderId(providerId: string): string {
-  return providerId.slice(CUSTOM_PROVIDER_PREFIX.length);
 }

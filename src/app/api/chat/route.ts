@@ -1,7 +1,8 @@
 import { streamText, stepCountIs, tool } from "ai";
 import { createMCPClient } from "@ai-sdk/mcp";
 import { z } from "zod";
-import { createModel, isAnthropicModel, type CustomApiConfig } from "@/lib/create-model";
+import { createModel, isAnthropicModel } from "@/lib/create-model";
+import type { CustomApiConfig } from "@/store/settings-store";
 import { Bash } from "just-bash";
 import { createBashTool } from "bash-tool";
 import {
