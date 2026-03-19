@@ -15,7 +15,7 @@ Each widget is a full React app — with its own dependencies, API calls, charts
 ## How it works
 
 1. Click **Add Widget** and describe what you want
-2. An AI agent writes the React code, installs dependencies, and builds it inside a Docker container
+2. An AI agent writes the React code, installs dependencies, and builds it in a secure sandbox
 3. The widget renders live in an iframe on your dashboard
 4. Iterate by chatting — the agent rewrites and rebuilds in seconds
 
@@ -24,9 +24,7 @@ Each widget is a full React app — with its own dependencies, API calls, charts
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) 20+
-- [Docker](https://www.docker.com/) running locally
 - An API key from any [supported provider](#supported-providers) (Anthropic, OpenAI, Google, xAI, Mistral, and more)
-- [Make](https://www.gnu.org/software/make/) (pre-installed on macOS/Linux)
 
 ### Setup
 
@@ -46,20 +44,14 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 See [`.env.example`](.env.example) for the full list of supported environment variables.
 
-Bootstrap everything (install deps + build Docker image + start dev server):
+Install and start:
 
 ```bash
-make all
+npm install
+npm run dev
 ```
 
-Or step by step:
-
-```bash
-make setup   # npm install + build widget-base Docker image
-make dev     # start Next.js dev server
-```
-
-Open [http://localhost:3000](http://localhost:3000). Run `make help` to see all available targets.
+Open [http://localhost:3000](http://localhost:3000).
 
 ## Architecture
 
@@ -81,9 +73,9 @@ Open [http://localhost:3000](http://localhost:3000). Run `make help` to see all 
      │             │                 │
      ▼             ▼                 ▼
 ┌─────────┐  ┌──────────┐  ┌─────────────────┐
-│ SQLite  │  │ Docker   │  │ AI Providers    │
-│ (state) │  │ (builds) │  │ (BYOK)          │
-│         │  │          │  │                 │
+│ SQLite  │  │ Secure   │  │ AI Providers    │
+│ (state) │  │ Exec     │  │ (BYOK)          │
+│         │  │ (V8)     │  │                 │
 │ widgets │  │ vite     │  │ Anthropic       │
 │ layouts │  │ serve    │  │ OpenAI / Google  │
 │ files   │  │ dist/    │  │ xAI / Mistral…  │
@@ -94,7 +86,7 @@ Open [http://localhost:3000](http://localhost:3000). Run `make help` to see all 
 
 **Server** — Next.js API routes. AI chat uses Vercel AI SDK with any supported provider. Widget files stored in SQLite via Drizzle ORM. CORS proxy for widget API calls.
 
-**Widget Runtime** — A single Docker container running `serve`. The agent writes files, Vite builds them, and the built output is served as static HTML. A Docker volume persists builds across container restarts.
+**Widget Runtime** — Each widget runs in a [Secure Exec](https://secureexec.dev/) sandbox (V8 isolate). The agent writes files, Vite builds them, and the built output is served as static HTML. No Docker required.
 
 **Widget Template** — Each widget gets React 18, Tailwind CSS, Recharts, MapLibre GL, Framer Motion, date-fns, Lucide icons, and all shadcn/ui components out of the box.
 
