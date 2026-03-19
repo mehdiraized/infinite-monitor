@@ -398,6 +398,7 @@ export async function POST(request: Request) {
             }
 
             case "tool-result":
+              send({ type: "tool-result" });
               break;
 
             case "abort":

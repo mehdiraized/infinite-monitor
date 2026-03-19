@@ -346,6 +346,8 @@ async function streamToWidget(
               action = `Using ${event.toolName}`;
             }
             if (action) setCurrentAction(widgetId, action);
+          } else if (event.type === "tool-result") {
+            setCurrentAction(widgetId, null);
           } else if (event.type === "abort") {
             updateAssistantMessage(
               widgetId,
