@@ -142,6 +142,25 @@ export function shiftItemsDown(
   };
 }
 
+export function getNextWidgetInsertionY(
+  widgets: Widget[],
+  widgetIds: string[],
+  textBlocks: TextBlock[],
+  textBlockIds: string[],
+  newHeight: number,
+): number {
+  const topY = Math.min(
+    ...widgets
+      .filter((w) => widgetIds.includes(w.id))
+      .map((w) => w.layout.y),
+    ...textBlocks
+      .filter((tb) => textBlockIds.includes(tb.id))
+      .map((tb) => tb.layout.y),
+  );
+
+  return Number.isFinite(topY) ? topY - newHeight : 0;
+}
+
 export const useWidgetStore = create<WidgetStore>()(
   persist(
     (set, get) => ({
@@ -211,6 +230,13 @@ export const useWidgetStore = create<WidgetStore>()(
         const dashboard = get().dashboards.find((d) => d.id === dashId);
         const newHeight = 3;
         const id = generateId("widget");
+        const insertionY = getNextWidgetInsertionY(
+          widgets,
+          dashboard?.widgetIds ?? [],
+          textBlocks,
+          dashboard?.textBlockIds ?? [],
+          newHeight,
+        );
 
         const widget: Widget = {
           id,
@@ -222,23 +248,14 @@ export const useWidgetStore = create<WidgetStore>()(
           iframeVersion: 0,
           layout: {
             x: 0,
-            y: 0,
+            y: insertionY,
             w: 4,
             h: newHeight,
           },
         };
 
-        const shifted = shiftItemsDown(
-          widgets,
-          dashboard?.widgetIds ?? [],
-          textBlocks,
-          dashboard?.textBlockIds ?? [],
-          newHeight,
-        );
-
         set((state) => ({
-          widgets: [...shifted.widgets, widget],
-          textBlocks: shifted.textBlocks,
+          widgets: [...state.widgets, widget],
           dashboards: state.dashboards.map((d) =>
             d.id === dashId ? { ...d, widgetIds: [...d.widgetIds, id] } : d
           ),

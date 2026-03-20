@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { shiftItemsDown } from "@/store/widget-store";
-import type { Widget, TextBlock } from "@/store/widget-store";
+import { beforeEach, describe, expect, it } from "vitest";
+import { getNextWidgetInsertionY, shiftItemsDown, useWidgetStore } from "@/store/widget-store";
+import type { Dashboard, TextBlock, Widget } from "@/store/widget-store";
 
 function makeWidget(id: string, x: number, y: number, w: number, h: number): Widget {
   return {
@@ -23,6 +23,30 @@ function makeTextBlock(id: string, x: number, y: number, w: number, h: number): 
     layout: { x, y, w, h },
   };
 }
+
+function makeDashboard(id: string, widgetIds: string[] = [], textBlockIds: string[] = []): Dashboard {
+  return {
+    id,
+    title: id,
+    widgetIds,
+    textBlockIds,
+    createdAt: 0,
+  };
+}
+
+beforeEach(() => {
+  useWidgetStore.setState({
+    dashboards: [],
+    activeDashboardId: null,
+    widgets: [],
+    textBlocks: [],
+    activeWidgetId: null,
+    streamingWidgetIds: [],
+    currentActions: {},
+    reasoningStreamingIds: [],
+    viewports: {},
+  });
+});
 
 describe("shiftItemsDown", () => {
   it("shifts matching widgets down by the given amount", () => {
@@ -68,5 +92,75 @@ describe("shiftItemsDown", () => {
     const result = shiftItemsDown([], [], [], [], 3);
     expect(result.widgets).toEqual([]);
     expect(result.textBlocks).toEqual([]);
+  });
+});
+
+describe("getNextWidgetInsertionY", () => {
+  it("returns the baseline row when the dashboard is empty", () => {
+    expect(getNextWidgetInsertionY([], [], [], [], 3)).toBe(0);
+  });
+
+  it("places a new widget above the highest widget or text block", () => {
+    const widgets = [
+      makeWidget("w1", 0, 4, 4, 3),
+      makeWidget("w2", 0, 1, 4, 3),
+    ];
+    const textBlocks = [makeTextBlock("t1", 0, -2, 3, 1)];
+
+    expect(getNextWidgetInsertionY(widgets, ["w1", "w2"], textBlocks, ["t1"], 3)).toBe(-5);
+  });
+});
+
+describe("addWidget", () => {
+  it("places the first widget at the baseline row", () => {
+    const widgetId = useWidgetStore.getState().addWidget("First");
+    const { dashboards, activeDashboardId, widgets } = useWidgetStore.getState();
+
+    expect(dashboards).toHaveLength(1);
+    expect(activeDashboardId).toBe(dashboards[0].id);
+    expect(dashboards[0].widgetIds).toEqual([widgetId]);
+    expect(widgets).toHaveLength(1);
+    expect(widgets[0].layout).toMatchObject({ x: 0, y: 0, w: 4, h: 3 });
+  });
+
+  it("places a new widget directly above the current topmost widget", () => {
+    useWidgetStore.setState({
+      dashboards: [makeDashboard("dash-1", ["w1", "w2"])],
+      activeDashboardId: "dash-1",
+      widgets: [
+        makeWidget("w1", 0, 6, 4, 3),
+        makeWidget("w2", 0, 2, 4, 3),
+      ],
+    });
+
+    const widgetId = useWidgetStore.getState().addWidget("Inserted");
+    const { widgets } = useWidgetStore.getState();
+    const inserted = widgets.find((widget) => widget.id === widgetId);
+
+    expect(inserted?.layout.y).toBe(-1);
+    expect(widgets.find((widget) => widget.id === "w1")?.layout.y).toBe(6);
+    expect(widgets.find((widget) => widget.id === "w2")?.layout.y).toBe(2);
+  });
+
+  it("uses text blocks when computing the top edge and leaves existing items unchanged", () => {
+    useWidgetStore.setState({
+      dashboards: [makeDashboard("dash-1", ["w1", "w2"], ["t1"])],
+      activeDashboardId: "dash-1",
+      widgets: [
+        makeWidget("w1", 0, 7, 4, 3),
+        makeWidget("w2", 0, 1, 4, 3),
+      ],
+      textBlocks: [makeTextBlock("t1", 0, -2, 3, 1)],
+    });
+
+    const before = useWidgetStore.getState();
+    const widgetId = before.addWidget("Inserted");
+    const after = useWidgetStore.getState();
+    const inserted = after.widgets.find((widget) => widget.id === widgetId);
+
+    expect(inserted?.layout.y).toBe(-5);
+    expect(after.widgets.find((widget) => widget.id === "w1")?.layout.y).toBe(7);
+    expect(after.widgets.find((widget) => widget.id === "w2")?.layout.y).toBe(1);
+    expect(after.textBlocks.find((block) => block.id === "t1")?.layout.y).toBe(-2);
   });
 });
