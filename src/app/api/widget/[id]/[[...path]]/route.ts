@@ -14,6 +14,29 @@ const LOADING_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function errorHtml(message?: string): string {
+  const detail = message ? `<pre style="margin:0;white-space:pre-wrap;word-break:break-word;color:#f4f4f5;max-width:640px">${escapeHtml(message)}</pre>` : "<div>No error details were captured.</div>";
+  return `<!DOCTYPE html>
+<html class="dark">
+<head><meta charset="UTF-8"><meta http-equiv="refresh" content="30"></head>
+<body style="margin:0;background:#27272a;display:flex;align-items:center;justify-content:center;height:100vh;font-family:ui-monospace,monospace;color:#a1a1aa;font-size:12px;padding:16px;">
+<div style="max-width:680px;width:100%;border:1px solid #3f3f46;background:#18181b;padding:16px">
+<div style="color:#f59e0b;text-transform:uppercase;letter-spacing:0.08em;font-size:11px;margin-bottom:8px">Widget build failed</div>
+${detail}
+</div>
+</body>
+</html>`;
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; path?: string[] }> }
@@ -29,6 +52,13 @@ export async function GET(
   }
 
   const widget = await ensureWidget(id);
+
+  if (widget.status === "error") {
+    return new Response(errorHtml(widget.error), {
+      status: 200,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+  }
 
   if (widget.status !== "ready") {
     return new Response(LOADING_HTML, {

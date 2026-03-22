@@ -48,7 +48,11 @@ for (const [filePath, content] of Object.entries(TEMPLATES)) {
 }
 
 console.log("[prebuild] Running npm install...");
-execSync("npm install", { cwd: BASE_DIR, stdio: "inherit", timeout: 120_000 });
+execSync("npm install --include=dev", {
+  cwd: BASE_DIR,
+  stdio: "inherit",
+  timeout: 120_000,
+});
 
 console.log("[prebuild] Installing shadcn components...");
 try {

@@ -28,6 +28,7 @@ import {
 } from "@/db/widgets";
 
 const execAsync = promisify(execCb);
+const TEMPLATE_INSTALL_CMD = "npm install --include=dev";
 
 // ── Types ──
 
@@ -35,6 +36,7 @@ interface WidgetStatus {
   status: "building" | "ready" | "error";
   port: number;
   startedAt?: number;
+  error?: string;
 }
 
 interface WidgetSandbox {
@@ -111,6 +113,18 @@ const PREBAKED_DIR = join(process.cwd(), ".cache", "widget-base-template");
 let baseTemplateDir: string | null = null;
 let baseTemplatePromise: Promise<string> | null = null;
 
+function getBuildErrorMessage(error: unknown): string {
+  if (error && typeof error === "object") {
+    const err = error as { stderr?: string | Buffer; stdout?: string | Buffer; message?: string };
+    const detail = err.stderr ?? err.stdout ?? err.message;
+    if (detail) {
+      return String(detail).trim().split("\n").slice(-8).join("\n");
+    }
+  }
+  if (typeof error === "string") return error;
+  return "Unknown widget build error";
+}
+
 async function ensureBaseTemplate(): Promise<string> {
   if (baseTemplateDir && existsSync(join(baseTemplateDir, "node_modules"))) {
     return baseTemplateDir;
@@ -137,7 +151,7 @@ async function ensureBaseTemplate(): Promise<string> {
       writeFileSync(full, content);
     }
 
-    await execAsync("npm install", { cwd: dir, timeout: 120_000 });
+    await execAsync(TEMPLATE_INSTALL_CMD, { cwd: dir, timeout: 120_000 });
     console.log("[secure-exec] npm install done");
 
     try {
@@ -328,7 +342,12 @@ async function doBuild(widgetId: string): Promise<void> {
   try {
     const files = getWidgetFiles(widgetId);
     if (!files["src/App.tsx"]) {
-      widgetStatuses.set(widgetId, { status: "error", port });
+      widgetStatuses.set(widgetId, {
+        status: "error",
+        port,
+        startedAt: Date.now(),
+        error: "Missing src/App.tsx",
+      });
       console.error(`[secure-exec] No src/App.tsx for ${widgetId}`);
       return;
     }
@@ -377,7 +396,12 @@ async function doBuild(widgetId: string): Promise<void> {
     console.log(`[secure-exec] Widget ${widgetId} serving on port ${port}`);
   } catch (err) {
     console.error(`[secure-exec] Build error for ${widgetId}:`, err);
-    widgetStatuses.set(widgetId, { status: "error", port });
+    widgetStatuses.set(widgetId, {
+      status: "error",
+      port,
+      startedAt: Date.now(),
+      error: getBuildErrorMessage(err),
+    });
   }
 }
 
@@ -392,12 +416,18 @@ export async function buildWidget(widgetId: string): Promise<void> {
 }
 
 const BUILD_TIMEOUT_MS = 120_000;
+const ERROR_RETRY_MS = 30_000;
 
 export async function ensureWidget(widgetId: string): Promise<WidgetStatus> {
   const existing = widgetStatuses.get(widgetId);
   if (existing?.status === "ready" && widgetSandboxes.has(widgetId)) return existing;
   const isStale = existing?.status === "building" && existing.startedAt && Date.now() - existing.startedAt > BUILD_TIMEOUT_MS;
+  const shouldRetryError =
+    existing?.status === "error" &&
+    existing.startedAt &&
+    Date.now() - existing.startedAt > ERROR_RETRY_MS;
   if (existing?.status === "building" && !isStale) return existing;
+  if (existing?.status === "error" && !shouldRetryError) return existing;
 
   const port = await getPort({ port: portNumbers(4100, 4999) });
   const status: WidgetStatus = { status: "building", port, startedAt: Date.now() };
@@ -408,7 +438,7 @@ export async function ensureWidget(widgetId: string): Promise<WidgetStatus> {
 
 export async function rebuildWidget(widgetId: string): Promise<WidgetStatus> {
   const port = await getPort({ port: portNumbers(4100, 4999) });
-  const status: WidgetStatus = { status: "building", port };
+  const status: WidgetStatus = { status: "building", port, startedAt: Date.now() };
   widgetStatuses.set(widgetId, status);
   buildWidget(widgetId).catch((err) => console.error(`[secure-exec] Rebuild failed for ${widgetId}:`, err));
   return status;
