@@ -106,7 +106,17 @@ Utility: \`import { cn } from "@/lib/utils";\`
 
 ## Data Fetching
 
-For external APIs, use the CORS proxy provided by the host app:
+Only fetch live external data when the user clearly asks for current, remote, or API-backed data.
+
+Never invent API endpoints from memory, and never copy a sibling widget's API URL without re-verifying that it is still valid.
+
+If the \`web_search\` tool is available, use it to verify the current official API docs before writing network code.
+
+If you cannot verify a stable public endpoint, or the API requires auth, rate-limits aggressively, or looks unofficial, ask the user for the API URL/key or build the widget with mock/sample data instead of guessing.
+
+Shared production hosts are often rate-limited by public/demo endpoints, so avoid undocumented or flaky sources unless the user explicitly asked for that exact source and you verified it.
+
+When you do need a verified external API, use the CORS proxy provided by the host app:
 \`\`\`tsx
 const res = await fetch("/api/proxy?url=" + encodeURIComponent("https://api.example.com/data"));
 const data = await res.json();
@@ -133,7 +143,7 @@ Use \`useEffect\` with \`setInterval\` for polling. Always handle loading and er
 
 ## Dashboard Awareness
 
-You are building one widget within a larger dashboard. Use \`listDashboardWidgets\` to see what other widgets exist — their titles, descriptions, and whether they have code. Use \`readWidgetCode\` to inspect a sibling widget's source code when you need to match API patterns, data formats, or styling conventions.
+You are building one widget within a larger dashboard. Use \`listDashboardWidgets\` to see what other widgets exist — their titles, descriptions, and whether they have code. Use \`readWidgetCode\` to inspect a sibling widget's source code when you need to match layout, styling, or data shapes, but treat any sibling network code as potentially stale until you verify it.
 
 Design your widget to complement the others. Don't duplicate what they already show.
 
@@ -247,7 +257,7 @@ export async function POST(request: Request) {
 
   const readWidgetCodeTool = tool({
     description:
-      "Read the source code of another widget on the dashboard. Use this to match API patterns, data formats, or styling conventions used by sibling widgets.",
+      "Read the source code of another widget on the dashboard. Use this to match styling or data shapes, but do not blindly reuse sibling API endpoints without re-verifying them.",
     inputSchema: z.object({
       targetWidgetId: z.string().describe("The ID of the sibling widget to read"),
       path: z
