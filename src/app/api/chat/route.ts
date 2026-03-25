@@ -370,6 +370,15 @@ export async function POST(request: Request) {
         );
       };
 
+      const KEEPALIVE_INTERVAL_MS = 15_000;
+      const keepalive = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(": keepalive\n\n"));
+        } catch {
+          clearInterval(keepalive);
+        }
+      }, KEEPALIVE_INTERVAL_MS);
+
       let pendingToolInput: {
         toolName: string;
         accumulated: string;
@@ -527,6 +536,7 @@ export async function POST(request: Request) {
       } catch (err) {
         send({ type: "error", error: String(err) });
       } finally {
+        clearInterval(keepalive);
         for (const client of mcpClients) {
           client.close().catch(() => {});
         }
@@ -539,8 +549,9 @@ export async function POST(request: Request) {
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
     },
   });
 }
